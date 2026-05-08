@@ -1,0 +1,115 @@
+"""
+routers/jobs.py — /jobs endpoints
+"""
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
+import asyncio
+import json
+
+from database import get_db
+from models import Job
+from schemas import JobCreate, JobResponse, MessageResponse, PaginatedJobs
+
+router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+# SSE event bus: job_id -> list of queues
+_sse_queues: dict[int, list[asyncio.Queue]] = {}
+
+
+def get_sse_queues():
+    return _sse_queues
+
+
+async def broadcast_event(job_id: int, event: dict):
+    """Push SSE event to all listeners of a job."""
+    queues = _sse_queues.get(job_id, [])
+    for q in queues:
+        await q.put(event)
+
+
+@router.post("/", response_model=MessageResponse, status_code=202)
+async def create_job(
+    payload: JobCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Start a new lead generation job."""
+    job = Job(city=payload.city.strip(), category=payload.category.strip())
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    # Run pipeline in background
+    background_tasks.add_task(run_pipeline, job.id)
+
+    return MessageResponse(message="Job started", job_id=job.id)
+
+
+@router.get("/", response_model=PaginatedJobs)
+async def list_jobs(
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    offset = (page - 1) * page_size
+    total_result = await db.execute(select(func.count()).select_from(Job))
+    total = total_result.scalar_one()
+    result = await db.execute(
+        select(Job).order_by(Job.created_at.desc()).offset(offset).limit(page_size)
+    )
+    jobs = result.scalars().all()
+    return PaginatedJobs(items=jobs, total=total, page=page, page_size=page_size)
+
+
+@router.get("/{job_id}", response_model=JobResponse)
+async def get_job(job_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.get("/{job_id}/stream")
+async def stream_job_events(job_id: int, db: AsyncSession = Depends(get_db)):
+    """Server-Sent Events endpoint for real-time job progress."""
+    # Verify job exists
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _sse_queues.setdefault(job_id, []).append(queue)
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                    if event.get("type") == "done":
+                        break
+                except asyncio.TimeoutError:
+                    # Send keepalive
+                    yield ": keepalive\n\n"
+        finally:
+            _sse_queues[job_id].remove(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def run_pipeline(job_id: int):
+    """Background task: run all pipeline steps for a job."""
+    # Import here to avoid circular imports
+    from workers.orchestrator import orchestrate
+    await orchestrate(job_id, broadcast_event)
