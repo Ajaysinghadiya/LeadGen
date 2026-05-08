@@ -3,7 +3,7 @@ schemas.py — Pydantic request/response schemas
 """
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ─── Job Schemas ─────────────────────────────────────────────────────────────
@@ -11,6 +11,10 @@ from pydantic import BaseModel
 class JobCreate(BaseModel):
     city: str
     category: str
+    max_leads: int = Field(default=25, ge=1, le=100,
+                           description="Cap on number of leads passed to the agent loop. Controls API spend.")
+    force_refresh: bool = Field(default=False,
+                                description="If True, bypass the 24h discovery cache and refetch from the source API.")
 
 
 class JobResponse(BaseModel):
@@ -19,9 +23,12 @@ class JobResponse(BaseModel):
     category: str
     status: str
     current_step: Optional[str]
+    max_leads: int
+    force_refresh: bool
     total_found: int
     qualified_leads: int
     outreach_sent: int
+    skipped_count: int
     error_message: Optional[str]
     created_at: datetime
     updated_at: datetime

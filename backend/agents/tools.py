@@ -22,6 +22,10 @@ from workers.site_generator import generate_site_openai, generate_site_mock
 from workers.video_recorder import record_site_video
 from workers.message_composer import compose_with_openai, compose_mock
 from workers.whatsapp_sender import send_via_twilio, simulate_send
+from agents.template_cache import render_site, render_message
+
+# Surface last cache hit to the orchestrator so it can emit a cost_saved SSE event.
+LAST_CACHE_HIT: dict = {"generate_site": None, "compose_message": None}
 
 # WhatsApp Web bridge (Node sidecar running whatsapp-web.js)
 WHATSAPP_BRIDGE_URL = os.environ.get("WHATSAPP_BRIDGE_URL", "http://localhost:8001")
@@ -177,21 +181,12 @@ async def dispatch(tool_name: str, tool_input: dict):
         return {"score": float(score), "url": url}
 
     if tool_name == "generate_site":
-        lead_ns = SimpleNamespace(
-            id=tool_input["lead_id"],
-            business_name=tool_input["business_name"],
-            category=tool_input["category"],
-            city=tool_input["city"],
-            address=tool_input.get("address"),
-            phone=tool_input.get("phone"),
-        )
-        if settings.is_real("openai_api_key"):
-            html = await generate_site_openai(lead_ns)
-        else:
-            html = generate_site_mock(lead_ns)
+        # Cache-first: AI generates ONE template per category, code substitutes per lead.
+        html, cache_hit = await render_site(tool_input)
+        LAST_CACHE_HIT["generate_site"] = cache_hit
         sites_dir = Path(settings.generated_sites_dir)
         sites_dir.mkdir(parents=True, exist_ok=True)
-        site_path = sites_dir / f"lead_{lead_ns.id}.html"
+        site_path = sites_dir / f"lead_{tool_input['lead_id']}.html"
         site_path.write_text(html, encoding="utf-8")
         return str(site_path)
 
@@ -207,16 +202,10 @@ async def dispatch(tool_name: str, tool_input: dict):
         return {"success": bool(ok), "video_path": video_path if ok else None}
 
     if tool_name == "compose_message":
-        lead_ns = SimpleNamespace(
-            id=tool_input["lead_id"],
-            business_name=tool_input["business_name"],
-            category=tool_input["category"],
-            city=tool_input["city"],
-            approach=tool_input["approach"],
-        )
-        if settings.is_real("openai_api_key"):
-            return await compose_with_openai(lead_ns)
-        return compose_mock(lead_ns)
+        # Cache-first: AI generates ONE message template per (category, approach).
+        message, cache_hit = await render_message(tool_input)
+        LAST_CACHE_HIT["compose_message"] = cache_hit
+        return message
 
     if tool_name == "send_whatsapp":
         phone = tool_input["phone"]

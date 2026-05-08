@@ -21,9 +21,15 @@ class Job(Base):
     # Status: pending | running | completed | failed
     current_step: Mapped[str | None] = mapped_column(String(30), nullable=True)
     # Steps: discovery | audit | generation | recording | messaging | sending
+
+    # Cost controls
+    max_leads: Mapped[int] = mapped_column(Integer, default=25)
+    force_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
+
     total_found: Mapped[int] = mapped_column(Integer, default=0)
     qualified_leads: Mapped[int] = mapped_column(Integer, default=0)
     outreach_sent: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())

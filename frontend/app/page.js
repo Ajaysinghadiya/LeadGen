@@ -73,15 +73,37 @@ function JobCard({ job }) {
           <div className="job-stat-val">{job.outreach_sent || 0}</div>
           <div className="job-stat-lbl">Sent</div>
         </div>
+        <div className="job-stat">
+          <div className="job-stat-val" style={{ color: 'var(--text-muted)' }}>
+            {job.skipped_count || 0}
+          </div>
+          <div className="job-stat-lbl">Skipped</div>
+        </div>
       </div>
+      {job.max_leads && (
+        <div style={{
+          fontSize: '0.68rem',
+          color: 'var(--text-muted)',
+          marginTop: '0.5rem',
+          display: 'flex',
+          gap: '0.5rem',
+        }}>
+          <span>cap: {job.max_leads}</span>
+          {job.force_refresh && <span style={{ color: 'var(--primary)' }}>· force-refresh</span>}
+        </div>
+      )}
     </Link>
   )
 }
+
+const LEAD_CAP_OPTIONS = [10, 20, 25, 30, 35, 50]
 
 export default function DashboardPage() {
   const router = useRouter()
   const [city, setCity] = useState('')
   const [category, setCategory] = useState('')
+  const [maxLeads, setMaxLeads] = useState(25)
+  const [forceRefresh, setForceRefresh] = useState(false)
   const [loading, setLoading] = useState(false)
   const [jobs, setJobs] = useState([])
   const [jobsLoading, setJobsLoading] = useState(true)
@@ -110,7 +132,10 @@ export default function DashboardPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await createJob(city.trim(), category.trim())
+      const res = await createJob(city.trim(), category.trim(), {
+        maxLeads,
+        forceRefresh,
+      })
       router.push(`/jobs/${res.job_id}`)
     } catch (e) {
       setError(e.message)
@@ -187,6 +212,19 @@ export default function DashboardPage() {
                   required
                 />
               </div>
+              <div className="input-group" style={{ flex: '0 0 130px' }}>
+                <label className="input-label">Max Leads</label>
+                <select
+                  className="input"
+                  value={maxLeads}
+                  onChange={(e) => setMaxLeads(parseInt(e.target.value, 10))}
+                  title="Cap on leads passed to the agent loop. Lower = less API spend."
+                >
+                  {LEAD_CAP_OPTIONS.map(n => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </div>
               <button
                 type="submit"
                 className="btn btn-primary btn-lg"
@@ -198,6 +236,22 @@ export default function DashboardPage() {
                   '⚡ Start Job'
                 )}
               </button>
+            </div>
+            <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: '0.4rem',
+                fontSize: '0.78rem', color: 'var(--text-secondary)', cursor: 'pointer',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={forceRefresh}
+                  onChange={(e) => setForceRefresh(e.target.checked)}
+                />
+                Force refresh discovery
+              </label>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                Bypasses 24h cache. Use only when you need brand-new businesses (costs an API call).
+              </span>
             </div>
             {error && (
               <div style={{

@@ -58,7 +58,18 @@
       "PowerShell(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue)",
       "Bash(curl -s -o /dev/null -w \"Frontend: %{http_code}\\\\n\" http://localhost:3000/whatsapp)",
       "Bash(curl -s -o /dev/null -w \"QR proxy: %{http_code}\\\\n\" http://localhost:8000/whatsapp/qr)",
-      "Bash(curl -s -o /dev/null -w \"QR via Next proxy: %{http_code}\\\\n\" http://localhost:3000/api/whatsapp/qr)"
+      "Bash(curl -s -o /dev/null -w \"QR via Next proxy: %{http_code}\\\\n\" http://localhost:3000/api/whatsapp/qr)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep 2; Write-Host \"Backend killed\")",
+      "Bash(curl -s -X POST http://localhost:8000/jobs/ -H \"Content-Type: application/json\" -d '{\"city\":\"Jaipur\",\"category\":\"sweet shop\",\"max_leads\":20,\"force_refresh\":true}')",
+      "Bash(curl -s http://localhost:8000/jobs/1)",
+      "Bash(python -m json.tool)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep 2; Get-ChildItem \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\backend\" -Recurse -Directory -Filter \"__pycache__\" | Remove-Item -Recurse -Force; Remove-Item \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\backend\\\\data\" -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\data\" -Recurse -Force -ErrorAction SilentlyContinue; Write-Host \"Cleaned\")",
+      "Bash(curl -s -X POST http://localhost:8000/jobs/ -H \"Content-Type: application/json\" -d '{\"city\":\"Jaipur\",\"category\":\"sweet shop\",\"max_leads\":20,\"force_refresh\":false}')",
+      "PowerShell(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue } | Format-Table Id, ProcessName, Path -AutoSize)",
+      "Bash(curl -s -X POST http://localhost:8000/jobs/ -H \"Content-Type: application/json\" -d '{\"city\":\"Pune\",\"category\":\"gym\",\"max_leads\":15}')",
+      "Bash(awk -F= '{print $1, \\($2 == \"\" ? \"EMPTY\" : \"SET\"\\)}')",
+      "Bash(curl -s http://localhost:8000/jobs/2)",
+      "Bash(curl -s \"http://localhost:8000/leads/?job_id=2&page_size=30\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\91809\\Desktop\\All Antigravity\\LeadGen\\.claude"

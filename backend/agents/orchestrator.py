@@ -1,34 +1,41 @@
 """
-agents/orchestrator.py — Claude SDK agentic loop.
+agents/orchestrator.py — Claude SDK agentic loop with cost controls.
 
-Replaces the linear workers/orchestrator.py.
 For each lead in a job, runs an Anthropic tool-use loop:
   - The agent reasons (text blocks become 'thought' SSE events)
   - The agent calls tools (become 'action' SSE events)
   - Tool results become 'result' SSE events
   - Errors become 'error' SSE events
-  - Strong-website skips become 'skip' SSE events
+  - Strong-website / dedup skips become 'skip' SSE events
+  - Cache hits / dedup hits become 'cost_saved' SSE events
+
+Cost controls (run_job, before agent loop):
+  - 24h TTL on discovery: skip API call if same (city,category) ran recently
+  - Phone dedup: drop leads whose phone exists in any earlier job
+  - max_leads cap: slice the lead list before paying Anthropic per-lead
 """
 import json
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Awaitable
 
 import anthropic
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from config import settings
 from database import AsyncSessionLocal
 from models import Job, Lead, Outreach
-from agents.tools import TOOLS, dispatch
+from agents.tools import TOOLS, dispatch, LAST_CACHE_HIT
 
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
 SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 MODEL = "claude-sonnet-4-6"
 SEO_THRESHOLD = 60
-MAX_TURNS = 12   # safety cap on tool-use loop
+MAX_TURNS = 12
+DISCOVERY_TTL_HOURS = 24
 
 
 async def _emit(broadcast: Callable[[int, dict], Awaitable[None]],
@@ -48,29 +55,8 @@ async def run_agent(lead: Lead, job_id: int,
     score = lead.website_score if lead.existing_website else 0.0
     score = score or 0.0
 
-    # Pre-flight skip #1 — phone already messaged in any prior job (dedup)
-    if lead.phone:
-        async with AsyncSessionLocal() as db:
-            dup = await db.execute(
-                select(Lead).join(Outreach, Outreach.lead_id == Lead.id).where(
-                    Lead.phone == lead.phone,
-                    Lead.id != lead.id,
-                    Outreach.whatsapp_status.in_(["sent", "delivered", "read"]),
-                )
-            )
-            if dup.scalars().first():
-                await _emit(
-                    broadcast, job_id, lead_id_str, "skip",
-                    f"{lead.business_name} ({lead.phone}) already contacted in earlier outreach. Skipping."
-                )
-                cur = await db.execute(select(Lead).where(Lead.id == lead.id))
-                db_lead = cur.scalar_one_or_none()
-                if db_lead:
-                    db_lead.status = "skipped"
-                    await db.commit()
-                return
-
-    # Pre-flight skip #2 — already audited as strong site
+    # Pre-flight skip — already audited as strong site
+    # (Phone dedup is handled at run_job level so we never pay Anthropic per dup.)
     if score > SEO_THRESHOLD:
         await _emit(
             broadcast, job_id, lead_id_str, "skip",
@@ -132,6 +118,13 @@ async def run_agent(lead: Lead, job_id: int,
                         broadcast, job_id, lead_id_str, "result",
                         str(result)[:300]
                     )
+                    # Cache-hit telemetry: emit cost_saved when template cache served the request.
+                    if block.name in ("generate_site", "compose_message"):
+                        if LAST_CACHE_HIT.get(block.name) is True:
+                            await _emit(
+                                broadcast, job_id, lead_id_str, "result",
+                                f"💰 cost_saved: {block.name} served from template cache (no AI call)"
+                            )
                     if block.name == "send_whatsapp":
                         sent = True
                 except Exception as e:
@@ -147,10 +140,9 @@ async def run_agent(lead: Lead, job_id: int,
                         "content": str(result),
                     }],
                 })
-                break  # break-after-tool-call — re-enter loop
+                break
 
         if response.stop_reason == "end_turn" and not tool_call_made:
-            # Agent decided not to act — likely a high-score skip
             if not sent:
                 skipped = True
             break
@@ -162,7 +154,6 @@ async def run_agent(lead: Lead, job_id: int,
         await _emit(broadcast, job_id, lead_id_str, "error",
                     f"agent loop hit MAX_TURNS={MAX_TURNS}")
 
-    # Persist final lead status
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Lead).where(Lead.id == lead.id))
         db_lead = result.scalar_one_or_none()
@@ -174,12 +165,99 @@ async def run_agent(lead: Lead, job_id: int,
             await db.commit()
 
 
+async def _maybe_reuse_recent_leads(job: Job, broadcast, job_id: int) -> bool:
+    """24h TTL: if same (city,category) ran recently and was not force_refreshed,
+    clone the prior job's leads into this job and skip the discovery API call.
+    Returns True if we reused (and therefore should skip run_discovery)."""
+    if job.force_refresh:
+        return False
+
+    cutoff = datetime.utcnow() - timedelta(hours=DISCOVERY_TTL_HOURS)
+    async with AsyncSessionLocal() as db:
+        prior_q = await db.execute(
+            select(Job).where(
+                Job.id != job.id,
+                Job.city == job.city,
+                Job.category == job.category,
+                Job.created_at >= cutoff,
+                Job.total_found > 0,
+            ).order_by(Job.created_at.desc()).limit(1)
+        )
+        prior = prior_q.scalar_one_or_none()
+        if not prior:
+            return False
+
+        leads_q = await db.execute(select(Lead).where(Lead.job_id == prior.id))
+        prior_leads = list(leads_q.scalars().all())
+        if not prior_leads:
+            return False
+
+        for pl in prior_leads:
+            db.add(Lead(
+                job_id=job.id,
+                business_name=pl.business_name,
+                phone=pl.phone, email=pl.email, address=pl.address,
+                city=pl.city, category=pl.category,
+                existing_website=pl.existing_website,
+                website_score=pl.website_score,
+                needs_website=pl.needs_website,
+                status="audited",
+            ))
+
+        cur = await db.execute(select(Job).where(Job.id == job.id))
+        j = cur.scalar_one_or_none()
+        if j:
+            j.total_found = len(prior_leads)
+            j.current_step = "reused_cache"
+        await db.commit()
+
+    age_hours = (datetime.utcnow() - prior.created_at).total_seconds() / 3600
+    await _emit(
+        broadcast, job_id, "", "result",
+        f"💰 cost_saved: reusing {len(prior_leads)} leads from job #{prior.id} "
+        f"({age_hours:.1f}h ago). Skipping discovery API call. "
+        f"Toggle 'Force refresh' to override."
+    )
+    return True
+
+
+async def _phone_dedup(job_id: int, broadcast) -> int:
+    """Mark leads as 'duplicate' when phone matches any earlier Lead in another job.
+    Returns count of dedup hits."""
+    skipped = 0
+    async with AsyncSessionLocal() as db:
+        cur = await db.execute(
+            select(Lead).where(Lead.job_id == job_id, Lead.phone.isnot(None))
+        )
+        my_leads = list(cur.scalars().all())
+
+        for lead in my_leads:
+            dup_q = await db.execute(
+                select(func.count(Lead.id)).where(
+                    Lead.phone == lead.phone,
+                    Lead.job_id != job_id,
+                )
+            )
+            count = dup_q.scalar_one()
+            if count > 0:
+                lead.status = "duplicate"
+                skipped += 1
+
+        await db.commit()
+
+    if skipped > 0:
+        await _emit(
+            broadcast, job_id, "", "result",
+            f"💰 cost_saved: {skipped} duplicate phone(s) skipped before agent loop. "
+            f"Saved ~{skipped} Anthropic agent runs."
+        )
+    return skipped
+
+
 async def run_job(job_id: int,
                   broadcast: Callable[[int, dict], Awaitable[None]]) -> None:
-    """Process all leads in a job sequentially. Called as a FastAPI background task —
-    creates its own DB session because the request session is closed by the time we run."""
+    """Pipeline entry point. Phases: discover (or reuse), audit, dedup, cap, agent loop, finalize."""
 
-    # Phase 1 — discover leads if not already discovered, then mark job running
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Job).where(Job.id == job_id))
         job = result.scalar_one_or_none()
@@ -188,29 +266,40 @@ async def run_job(job_id: int,
         job.status = "running"
         job.current_step = "agent_loop"
         await db.commit()
+        # Snapshot job state we need after session close
+        job_snap = SimpleNamespace(
+            id=job.id, city=job.city, category=job.category,
+            max_leads=job.max_leads, force_refresh=job.force_refresh,
+        )
 
-    # Run discovery + audit via existing workers (these handle their own sessions)
+    # ─── Phase 1 — discovery (with 24h TTL short-circuit) ───────────────────
     try:
-        from workers.discovery import run_discovery
-        from workers.auditor import run_audit
+        async with AsyncSessionLocal() as db:
+            cur = await db.execute(select(Job).where(Job.id == job_id))
+            job = cur.scalar_one_or_none()
 
-        await broadcast(job_id, {
-            "type": "thought", "lead_id": "",
-            "content": f"Discovering businesses in {job.city} for category '{job.category}'...",
-            "timestamp": time.time(),
-        })
-        await run_discovery(job_id)
+        reused = await _maybe_reuse_recent_leads(job, broadcast, job_id)
 
-        await broadcast(job_id, {
-            "type": "thought", "lead_id": "",
-            "content": "Auditing existing websites...",
-            "timestamp": time.time(),
-        })
-        await run_audit(job_id)
+        if not reused:
+            from workers.discovery import run_discovery
+            await broadcast(job_id, {
+                "type": "thought", "lead_id": "",
+                "content": f"Discovering businesses in {job_snap.city} for category '{job_snap.category}'...",
+                "timestamp": time.time(),
+            })
+            await run_discovery(job_id)
+
+            from workers.auditor import run_audit
+            await broadcast(job_id, {
+                "type": "thought", "lead_id": "",
+                "content": "Auditing existing websites...",
+                "timestamp": time.time(),
+            })
+            await run_audit(job_id)
     except Exception as e:
         async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Job).where(Job.id == job_id))
-            job = result.scalar_one_or_none()
+            cur = await db.execute(select(Job).where(Job.id == job_id))
+            job = cur.scalar_one_or_none()
             if job:
                 job.status = "failed"
                 job.error_message = f"discovery/audit failed: {e}"
@@ -220,30 +309,47 @@ async def run_job(job_id: int,
         })
         return
 
-    # Phase 2 — fetch leads ready for the agent loop
+    # ─── Phase 2 — phone dedup (drops repeat targets BEFORE Anthropic loop) ──
+    await _phone_dedup(job_id, broadcast)
+
+    # ─── Phase 3 — apply max_leads cap ──────────────────────────────────────
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
+        cur = await db.execute(
             select(Lead).where(
                 Lead.job_id == job_id,
                 Lead.status.in_(["discovered", "audited"]),
-            )
+            ).order_by(Lead.website_score.asc().nulls_first(), Lead.id.asc())
         )
-        leads = list(result.scalars().all())
-        # Snapshot ORM attrs to plain objects so the loop can use them after the
-        # session closes (lazy-load would otherwise raise).
-        leads_snapshot = [
-            SimpleNamespace(
-                id=l.id, job_id=l.job_id, business_name=l.business_name,
-                category=l.category, city=l.city, address=l.address,
-                phone=l.phone, existing_website=l.existing_website,
-                website_score=l.website_score, needs_website=l.needs_website,
-                generated_site_path=l.generated_site_path, video_path=l.video_path,
-                status=l.status,
-            )
-            for l in leads
-        ]
+        eligible = list(cur.scalars().all())
 
-    # Phase 3 — run the agent loop per lead
+        cap = max(1, int(job_snap.max_leads or 25))
+        capped = eligible[:cap]
+        dropped = eligible[cap:]
+
+        for d in dropped:
+            d.status = "over_cap"
+        await db.commit()
+
+    if dropped:
+        await _emit(
+            broadcast, job_id, "", "result",
+            f"💰 cost_saved: lead cap = {cap}. Dropped {len(dropped)} extra lead(s) "
+            f"to control API spend. Increase 'Max leads' on the next job to widen."
+        )
+
+    leads_snapshot = [
+        SimpleNamespace(
+            id=l.id, job_id=l.job_id, business_name=l.business_name,
+            category=l.category, city=l.city, address=l.address,
+            phone=l.phone, existing_website=l.existing_website,
+            website_score=l.website_score, needs_website=l.needs_website,
+            generated_site_path=l.generated_site_path, video_path=l.video_path,
+            status=l.status,
+        )
+        for l in capped
+    ]
+
+    # ─── Phase 4 — run agent loop per (capped, deduped) lead ────────────────
     for lead in leads_snapshot:
         try:
             await run_agent(lead, job_id, broadcast)
@@ -255,17 +361,36 @@ async def run_job(job_id: int,
                 "timestamp": time.time(),
             })
 
-    # Phase 4 — finalize job
+    # ─── Phase 5 — finalize counters ────────────────────────────────────────
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Job).where(Job.id == job_id))
-        job = result.scalar_one_or_none()
+        cur = await db.execute(select(Job).where(Job.id == job_id))
+        job = cur.scalar_one_or_none()
         if job:
             job.status = "completed"
             job.current_step = None
-            sent_count_q = await db.execute(
-                select(Lead).where(Lead.job_id == job_id, Lead.status == "message_sent")
+
+            sent_q = await db.execute(
+                select(func.count(Lead.id)).where(
+                    Lead.job_id == job_id, Lead.status == "message_sent"
+                )
             )
-            job.outreach_sent = len(list(sent_count_q.scalars().all()))
+            job.outreach_sent = int(sent_q.scalar_one() or 0)
+
+            skip_q = await db.execute(
+                select(func.count(Lead.id)).where(
+                    Lead.job_id == job_id,
+                    Lead.status.in_(["skipped", "duplicate", "over_cap"]),
+                )
+            )
+            job.skipped_count = int(skip_q.scalar_one() or 0)
+
+            qual_q = await db.execute(
+                select(func.count(Lead.id)).where(
+                    Lead.job_id == job_id, Lead.needs_website == True   # noqa: E712
+                )
+            )
+            job.qualified_leads = int(qual_q.scalar_one() or 0)
+
             await db.commit()
 
     await broadcast(job_id, {
@@ -274,5 +399,3 @@ async def run_job(job_id: int,
         "content": "Pipeline complete",
         "timestamp": time.time(),
     })
-
-

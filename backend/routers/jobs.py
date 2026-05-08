@@ -36,7 +36,12 @@ async def create_job(
     db: AsyncSession = Depends(get_db),
 ):
     """Start a new lead generation job."""
-    job = Job(city=payload.city.strip(), category=payload.category.strip())
+    job = Job(
+        city=payload.city.strip(),
+        category=payload.category.strip(),
+        max_leads=payload.max_leads,
+        force_refresh=payload.force_refresh,
+    )
     db.add(job)
     await db.commit()
     await db.refresh(job)

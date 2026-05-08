@@ -96,12 +96,30 @@ The agent is **not** a fixed pipeline. It reasons per lead, picks the right bran
 |---|---|
 | Fixed order: discover → audit → generate → record → compose → send | Claude branches per lead based on score |
 | Every business gets identical treatment | Strong sites are skipped; medium pivots to SEO |
-| No dedup — same number could get hit on repeat jobs | Phone-based dedup pre-flight blocks repeat outreach |
+| No dedup — same number could get hit on repeat jobs | Phone dedup runs **before** agent loop (no Anthropic spend on duplicates) |
+| Re-discovery on every run — wasted SerpAPI calls | 24h TTL reuses leads from a recent matching job — `force_refresh` to override |
+| No lead cap — pipeline burns through whatever the API returned | `max_leads` per-job cap (UI dropdown 10/20/25/30/35/50, default 25) |
+| AI generates a site **per lead** — 30 leads = 30 OpenAI calls | AI generates **one template per category**; code substitutes per lead. Same for message templates |
 | Twilio-only send (paid, business approval) | Personal WhatsApp via QR bridge (free) — Twilio fallback |
-| Step events only | thought / action / result / error / skip events |
+| Step events only | thought / action / result / error / skip / **cost_saved** events |
 | Zero reasoning visible | Agent Thoughts panel streams chain-of-thought |
 
 v1 is preserved at `backend/workers/orchestrator.py` for reference but is no longer wired in.
+
+### Cost controls (added 2026-05)
+
+Three layers protect API spend, in this order:
+
+1. **24h discovery TTL** — `_maybe_reuse_recent_leads` in orchestrator. If the same `(city, category)` ran in the last 24h, clone its leads instead of refetching from SerpAPI. Toggleable per job via `force_refresh`.
+2. **Phone dedup** — `_phone_dedup` runs after discovery, before the agent loop. Marks leads `status="duplicate"` when the phone matches any earlier `Lead.phone` in any other job. Saves Anthropic tokens (the most expensive part).
+3. **`max_leads` cap** — slices the eligible-lead list to the per-job cap before the agent loop. UI shows `Max Leads` dropdown on dashboard. Lower cap → less spend.
+
+All three emit `cost_saved` SSE events into the Agent Thoughts panel so you can see what each layer saved per job.
+
+**Template cache (`agents/template_cache.py`):**
+- `data/site_templates/{category}.html` — one HTML template per category, generated once via OpenAI with `__BIZ_NAME__` / `__BIZ_CITY__` etc. placeholders. Subsequent leads in the same category use simple `str.replace` substitution. Zero AI cost on cache hits.
+- `data/message_templates/{category}__{approach}.txt` — same pattern for outreach text. Cache key = `(category, approach)`.
+- Wipe `data/site_templates/` or `data/message_templates/` to force regeneration (e.g., when prompt changes).
 
 ---
 
@@ -362,19 +380,33 @@ This repo is built with Claude Code subagents/skills/hooks under `.claude/`.
 
 ## Build Status
 
-v2 agentic layer + WhatsApp Web bridge: **shipped**.
+v2 agentic layer + WhatsApp Web bridge + cost controls: **shipped**.
 
 - [x] `backend/agents/__init__.py` + `agents/prompts/system.md`
-- [x] `backend/agents/tools.py` (6 tools, dispatch with SimpleNamespace adapter, bridge-first send routing)
-- [x] `backend/agents/orchestrator.py` (run_agent + run_job, break-after-tool-call loop, dedup pre-flight)
+- [x] `backend/agents/tools.py` (6 tools, dispatch with SimpleNamespace adapter, bridge-first send routing, template-cache integration)
+- [x] `backend/agents/orchestrator.py` (Claude SDK loop + 24h TTL + phone dedup + max_leads cap + cost_saved SSE)
+- [x] `backend/agents/template_cache.py` — AI-once-per-category for site HTML and message text
 - [x] `backend/mcp_servers/whatsapp_mcp.py` + `serp_mcp.py`
-- [x] `backend/routers/jobs.py` swap to `agents.orchestrator.run_job`
+- [x] `backend/routers/jobs.py` swap to `agents.orchestrator.run_job`, accepts `max_leads` + `force_refresh`
 - [x] `backend/routers/whatsapp.py` — `/whatsapp/{status,qr,logout}` proxy to bridge
+- [x] `backend/models.py` — `max_leads`, `force_refresh`, `skipped_count` on Job
 - [x] `whatsapp-bridge/` — Node sidecar (whatsapp-web.js + LocalAuth + Express)
-- [x] `frontend/app/jobs/[id]/page.js` two-column layout + Agent Thoughts panel
+- [x] `frontend/app/page.js` — Max Leads dropdown + Force-refresh checkbox
+- [x] `frontend/app/jobs/[id]/page.js` — two-column layout + Agent Thoughts panel
 - [x] `frontend/app/whatsapp/page.js` — QR pairing UI + status polling
 - [x] `frontend/components/Sidebar.js` — live WhatsApp status dot
-- [x] `backend/tests/test_agent_decisions.py` — 10/10 decision checks pass (incl. dedup)
+- [x] `backend/tests/test_agent_decisions.py` — 10/10 decision checks pass
+
+### Smoke test (recorded 2026-05-08)
+
+```
+Job 1: Pune / gym, max_leads=15
+  → SerpAPI returned 20 leads, capped to 15 (5 dropped as over_cap)
+Job 2: Pune / gym, max_leads=15 (re-run within 24h)
+  → TTL reuse: cloned 20 leads from Job 1 (zero SerpAPI calls)
+  → Phone dedup: 18/20 leads matched Job 1 phones → marked duplicate
+  → 18 Anthropic agent runs avoided. Net cost on a duplicate run: ~zero.
+```
 
 ---
 

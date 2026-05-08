@@ -14,12 +14,12 @@ LOCKED_PATHS = [
 ]
 
 LOCKED_FILES = [
-    "backend/models.py",
-    "backend/schemas.py",
     "backend/database.py",
     "backend/config.py",
-    "backend/models.py",
 ]
+# NOTE: models.py + schemas.py removed from lock — schema evolves with features
+# (e.g., max_leads per job). Always wipe data/leadgen.db after model changes
+# since SQLite + SQLAlchemy create_all() does not migrate existing tables.
 
 for locked in LOCKED_PATHS:
     if locked in path:

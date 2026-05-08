@@ -18,10 +18,16 @@ async function apiFetch(path, options = {}) {
 
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
-export async function createJob(city, category) {
+export async function createJob(city, category, opts = {}) {
+  const { maxLeads = 25, forceRefresh = false } = opts
   return apiFetch('/jobs/', {
     method: 'POST',
-    body: JSON.stringify({ city, category }),
+    body: JSON.stringify({
+      city,
+      category,
+      max_leads: maxLeads,
+      force_refresh: forceRefresh,
+    }),
   })
 }
 
