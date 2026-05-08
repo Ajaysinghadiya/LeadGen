@@ -23,8 +23,8 @@ data/
 **/data/generated_sites/
 **/data/videos/
 
-# Claude Code local config
-.claude/
+# Claude Code — track project config, exclude local overrides
+.claude/settings.local.json
 
 # OS
 .DS_Store

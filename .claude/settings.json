@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m '*)",
+      "Bash(gh repo *)",
+      "Bash(uvicorn *)",
+      "Bash(cd backend && python -m pytest *)",
+      "Bash(cd backend && python -c *)",
+      "Bash(cd frontend && npm *)",
+      "Bash(curl -s http://localhost:8000/*)",
+      "Bash(python .claude/hooks/guard_workers.py)",
+      "Bash(bash .claude/hooks/lint_agents.sh)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\91809\\Desktop\\All Antigravity\\LeadGen\\.claude"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/guard_workers.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/lint_agents.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
