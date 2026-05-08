@@ -17,6 +17,10 @@ node_modules/
 .next/
 out/
 
+# WhatsApp bridge runtime — contains paired session credentials, never commit
+whatsapp-bridge/.wwebjs_auth/
+whatsapp-bridge/.wwebjs_cache/
+
 # Data (runtime)
 data/
 **/data/leadgen.db

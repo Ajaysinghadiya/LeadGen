@@ -10,7 +10,6 @@ Lead ORM mismatch (workers expecting Lead ORM but Claude tool calls send dicts)
 is handled with a SimpleNamespace adapter.
 """
 import os
-from types import SimpleNamespace
 from pathlib import Path
 
 import httpx
@@ -18,9 +17,7 @@ import httpx
 from config import settings
 from workers.discovery import fetch_google_places, fetch_serpapi
 from workers.auditor import score_website
-from workers.site_generator import generate_site_openai, generate_site_mock
 from workers.video_recorder import record_site_video
-from workers.message_composer import compose_with_openai, compose_mock
 from workers.whatsapp_sender import send_via_twilio, simulate_send
 from agents.template_cache import render_site, render_message
 

@@ -279,6 +279,7 @@ img { max-width: 100%; display: block; }
   font-size: 0.95rem;
   transition: var(--transition);
   width: 100%;
+  color-scheme: dark;
 }
 .input:focus {
   border-color: var(--primary);
@@ -286,6 +287,31 @@ img { max-width: 100%; display: block; }
   background: rgba(249,115,22,0.05);
 }
 .input::placeholder { color: var(--text-muted); }
+
+/* All native <select> elements — global dark-mode dropdown styling */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='none' stroke='%23a3a3a3' stroke-width='1.6' d='M2.5 4.5L6 8l3.5-3.5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  padding-right: 2rem !important;
+  cursor: pointer;
+  color-scheme: dark;
+}
+select option {
+  background-color: #1a1a1a;
+  color: var(--text);
+  padding: 0.4rem 0.75rem;
+}
+select option:hover,
+select option:focus,
+select option:checked,
+select option:active {
+  background-color: var(--primary);
+  color: #fff;
+}
 
 /* ─── Cards ──────────────────────────────────────────────────── */
 .card {

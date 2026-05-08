@@ -111,17 +111,15 @@ async def run_one(lead, script):
 
 
 class _FakeAsyncCtxSession:
+    """Stub session used by run_agent's status-update queries.
+    run_job-level dedup/TTL/cap are NOT exercised here — those are integration concerns;
+    this test isolates the per-lead Claude-loop branching logic."""
     async def __aenter__(self): return self
     async def __aexit__(self, *a): return False
     async def execute(self, *a, **k):
         m = MagicMock()
         m.scalar_one_or_none = MagicMock(return_value=SimpleNamespace(status="x"))
-        # scalars() must return an obj with both .all() and .first() — first() is None
-        # so the dedup pre-flight check finds no prior outreach.
-        scalars_mock = MagicMock()
-        scalars_mock.all = MagicMock(return_value=[])
-        scalars_mock.first = MagicMock(return_value=None)
-        m.scalars = MagicMock(return_value=scalars_mock)
+        m.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
         return m
     async def commit(self): pass
 

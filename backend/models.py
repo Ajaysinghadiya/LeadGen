@@ -20,7 +20,8 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")
     # Status: pending | running | completed | failed
     current_step: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    # Steps: discovery | audit | generation | recording | messaging | sending
+    # Steps (v2): agent_loop | reused_cache | None
+    # (v1 used: discovery | audit | generation | recording | messaging | sending — no longer set)
 
     # Cost controls
     max_leads: Mapped[int] = mapped_column(Integer, default=25)

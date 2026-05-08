@@ -16,8 +16,10 @@ These intercept what would otherwise be per-lead OpenAI calls.
 Cache is filesystem-based — wipe `data/site_templates/` and `data/message_templates/`
 to force regeneration.
 """
+import os
 import re
 import logging
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,6 +32,23 @@ logger = logging.getLogger(__name__)
 
 def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (s or "unknown").lower()).strip("_")
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Write content to path atomically: write to tmp file in same dir, then rename.
+    Prevents TOCTOU races when concurrent callers regenerate the same template.
+    On Windows os.replace is atomic; on POSIX rename is atomic within same filesystem."""
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _site_template_dir() -> Path:
@@ -101,7 +120,7 @@ async def render_site(lead_dict: dict) -> tuple[str, bool]:
         return _substitute_site(template, lead_dict), True
 
     template = await _generate_site_template(category)
-    cache_path.write_text(template, encoding="utf-8")
+    _atomic_write(cache_path, template)
     return _substitute_site(template, lead_dict), False
 
 
@@ -151,5 +170,5 @@ async def render_message(lead_dict: dict) -> tuple[str, bool]:
         return _substitute_message(template, lead_dict), True
 
     template = await _generate_message_template(category, approach)
-    cache_path.write_text(template, encoding="utf-8")
+    _atomic_write(cache_path, template)
     return _substitute_message(template, lead_dict), False

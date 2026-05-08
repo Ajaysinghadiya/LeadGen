@@ -80,7 +80,11 @@ export function watchJob(jobId, onEvent, onError) {
     try {
       const data = JSON.parse(e.data)
       onEvent(data)
-      if (data.type === 'done' || data.type === 'error') {
+      // Close on terminal events only:
+      //   - 'done': pipeline complete
+      //   - 'error' WITH empty lead_id: fatal job-level error (discovery/audit failed)
+      // Per-lead errors (lead_id set) MUST NOT close the stream.
+      if (data.type === 'done' || (data.type === 'error' && !data.lead_id)) {
         source.close()
       }
     } catch {

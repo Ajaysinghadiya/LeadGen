@@ -156,5 +156,8 @@ while True:
 - MCP servers only for Twilio and Google Places/SerpAPI — nothing else gets MCP
 - Agent thoughts SSE uses the existing `broadcast_event(job_id, event)` in `routers/jobs.py` — do NOT add a second queue dict
 - `routers/jobs.py` already has `_sse_queues: dict[int, list[asyncio.Queue]]` and `broadcast_event()` — reuse them
-- Lead status values (from models.py): `discovered | audited | site_generated | video_recorded | message_sent | failed | skipped`
+- Lead status values actually set by v2 orchestrator: `discovered | audited | message_sent | skipped | duplicate | over_cap`
+  (legacy column allows `site_generated | video_recorded | failed` — kept for v1 compat but never set in v2)
+- Job.current_step values set by v2: `agent_loop | reused_cache | None`
+- SSE event types: `thought | action | result | error | skip | done` (cost-saving signals are emitted as `result` events with a 💰 prefix)
 - Background tasks must create their own `AsyncSessionLocal()` — never receive `db: AsyncSession` as a parameter (the request session is closed before the task runs)

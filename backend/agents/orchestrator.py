@@ -26,7 +26,7 @@ from sqlalchemy import select, func
 
 from config import settings
 from database import AsyncSessionLocal
-from models import Job, Lead, Outreach
+from models import Job, Lead
 from agents.tools import TOOLS, dispatch, LAST_CACHE_HIT
 
 
