@@ -109,7 +109,7 @@ async def stream_job_events(job_id: int, db: AsyncSession = Depends(get_db)):
 
 
 async def run_pipeline(job_id: int):
-    """Background task: run all pipeline steps for a job."""
+    """Background task: run the agentic pipeline for a job."""
     # Import here to avoid circular imports
-    from workers.orchestrator import orchestrate
-    await orchestrate(job_id, broadcast_event)
+    from agents.orchestrator import run_job
+    await run_job(job_id, broadcast_event)

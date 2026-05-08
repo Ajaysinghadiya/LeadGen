@@ -19,7 +19,16 @@
       "Edit(/.claude/skills/wrap-worker/**)",
       "Edit(/.claude/skills/test-decisions/**)",
       "Edit(/.claude/skills/sse-check/**)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(grep -E \"^\\(:root|\\\\\\\\-\\\\\\\\-|\\\\\\\\.badge-|\\\\\\\\.stat|\\\\\\\\.card|\\\\\\\\.live-log|\\\\\\\\.log-\\)\" \"c:/Users/91809/Desktop/All Antigravity/LeadGen/frontend/app/globals.css\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); from routers.jobs import router; print\\('jobs.py OK'\\)\")",
+      "Bash(python -m py_compile backend/agents/__init__.py backend/agents/tools.py backend/agents/orchestrator.py backend/mcp_servers/__init__.py backend/mcp_servers/whatsapp_mcp.py backend/mcp_servers/serp_mcp.py)",
+      "Bash(node -e \"const f=require\\('fs'\\).readFileSync\\('app/jobs/[id]/page.js','utf8'\\); require\\('vm'\\).createContext\\(\\); console.log\\('FILE_BYTES:',f.length\\)\")",
+      "Bash(python -m pip install anthropic mcp --quiet)",
+      "Bash(python -c \"import anthropic; import mcp; print\\('anthropic', anthropic.__version__\\); print\\('mcp ok'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -m pip install fastapi \"uvicorn[standard]\" sqlalchemy aiosqlite pydantic pydantic-settings python-dotenv httpx --quiet)",
+      "Bash(python tests/test_agent_decisions.py)"
     ],
     "additionalDirectories": [
       "c:\\Users\\91809\\Desktop\\All Antigravity\\LeadGen\\.claude"
