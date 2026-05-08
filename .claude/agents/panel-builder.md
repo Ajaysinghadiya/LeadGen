@@ -19,7 +19,7 @@ frontend/components/Sidebar.js — reference for nav structure
 Two-column layout, full viewport height minus sidebar.
 
 **Left column (40%):** Job header + lead cards
-- Job header: city, category, status badge (`discovered/running/completed/failed`), progress bar (`steps_done / steps_total`)
+- Job header: city, category, status badge (`pending/running/completed/failed`), outreach counter (`outreach_sent` leads reached)
 - Lead cards list: scrollable
   - Each card: `business_name`, `phone` (or "No phone"), website score badge (color-coded: red <30, yellow 30-60, green >60), outreach status pill
 

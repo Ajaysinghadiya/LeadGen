@@ -52,8 +52,15 @@ async def simulate_send(phone: str, message: str) -> dict
 # returns: {sid: str, status: str}
 ```
 
-**Lead ORM object key attributes:**
-`lead.business_name`, `lead.category`, `lead.city`, `lead.address`, `lead.phone`, `lead.needs_website`, `lead.website_score`, `lead.site_html_path`, `lead.video_path`
+**Lead ORM object — exact attribute names from models.py:**
+`lead.business_name`, `lead.category`, `lead.city`, `lead.address`, `lead.phone`,
+`lead.existing_website`, `lead.website_score`, `lead.needs_website`,
+`lead.generated_site_path`, `lead.video_path`, `lead.status`, `lead.id`, `lead.job_id`
+
+**Job ORM object — exact attribute names from models.py:**
+`job.status` (pending|running|completed|failed), `job.current_step`,
+`job.total_found`, `job.qualified_leads`, `job.outreach_sent`
+(No `steps_total` or `steps_done` fields exist — do not invent them.)
 
 **How tools.py must handle Lead ORM mismatch:**
 Workers taking `lead: Lead` cannot accept dicts from Claude tool calls.
@@ -147,4 +154,7 @@ while True:
 - `settings.is_real("twilio_account_sid")` → use Twilio; else `simulate_send()`
 - `settings.is_real("openai_api_key")` → use OpenAI workers; else mock
 - MCP servers only for Twilio and Google Places/SerpAPI — nothing else gets MCP
-- Agent thoughts SSE uses the existing `job_queues` dict in `routers/jobs.py`
+- Agent thoughts SSE uses the existing `broadcast_event(job_id, event)` in `routers/jobs.py` — do NOT add a second queue dict
+- `routers/jobs.py` already has `_sse_queues: dict[int, list[asyncio.Queue]]` and `broadcast_event()` — reuse them
+- Lead status values (from models.py): `discovered | audited | site_generated | video_recorded | message_sent | failed | skipped`
+- Background tasks must create their own `AsyncSessionLocal()` — never receive `db: AsyncSession` as a parameter (the request session is closed before the task runs)

@@ -5,42 +5,24 @@
       "Bash(git init *)",
       "Bash(git add *)",
       "Bash(git rm *)",
-      "Bash(git commit -m '*)",
+      "Bash(git commit -m ' *)",
       "Bash(gh repo *)",
-      "Bash(uvicorn *)",
-      "Bash(cd backend && python -m pytest *)",
-      "Bash(cd backend && python -c *)",
-      "Bash(cd frontend && npm *)",
-      "Bash(curl -s http://localhost:8000/*)",
-      "Bash(python .claude/hooks/guard_workers.py)",
-      "Bash(bash .claude/hooks/lint_agents.sh)"
+      "Bash(python -c \"import json; f=open\\('.claude/settings.json'\\); print\\(f.read\\(\\)\\)\")",
+      "Bash(sed -n '34,79p' backend/workers/discovery.py)",
+      "Bash(sed -n '20,82p' backend/workers/auditor.py)",
+      "Bash(sed -n '203,260p' backend/workers/site_generator.py)",
+      "Bash(sed -n '18,75p' backend/workers/video_recorder.py)",
+      "Bash(sed -n '22,54p' backend/workers/message_composer.py)",
+      "Bash(sed -n '17,42p' backend/workers/whatsapp_sender.py)",
+      "Bash(mkdir -p \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\.claude\\\\agents\" \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\.claude\\\\skills\\\\audit-workers\" \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\.claude\\\\skills\\\\wrap-worker\" \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\.claude\\\\skills\\\\test-decisions\" \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\.claude\\\\skills\\\\sse-check\" \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\.claude\\\\hooks\" 2>&1)",
+      "Edit(/.claude/skills/audit-workers/**)",
+      "Edit(/.claude/skills/wrap-worker/**)",
+      "Edit(/.claude/skills/test-decisions/**)",
+      "Edit(/.claude/skills/sse-check/**)",
+      "Bash(git push *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\91809\\Desktop\\All Antigravity\\LeadGen\\.claude"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python .claude/hooks/guard_workers.py"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/lint_agents.sh"
-          }
-        ]
-      }
     ]
   }
 }

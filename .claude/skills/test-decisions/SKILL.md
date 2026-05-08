@@ -21,22 +21,22 @@ import time
 lead_a = SimpleNamespace(
     id=1, business_name="Bassi Sweets", category="sweet shop",
     city="Jaipur", address="MI Road", phone="+91-9876543210",
-    website_url=None, website_score=0.0, needs_website=True,
-    site_html_path=None, video_path=None, status="discovered"
+    existing_website=None, website_score=0.0, needs_website=True,
+    generated_site_path=None, video_path=None, status="discovered", job_id=1
 )
 
 lead_b = SimpleNamespace(
     id=2, business_name="Sharma Dhaba", category="restaurant",
     city="Ahmedabad", address="CG Road", phone="+91-9876543211",
-    website_url="http://sharmadhabaold.wordpress.com", website_score=35.0,
-    needs_website=False, site_html_path=None, video_path=None, status="audited"
+    existing_website="http://sharmadhabaold.wordpress.com", website_score=35.0,
+    needs_website=False, generated_site_path=None, video_path=None, status="audited", job_id=1
 )
 
 lead_c = SimpleNamespace(
     id=3, business_name="Taj Hotel", category="hotel",
     city="Mumbai", address="Colaba", phone="+91-2222222222",
-    website_url="https://tajhotels.com", website_score=85.0,
-    needs_website=False, site_html_path=None, video_path=None, status="audited"
+    existing_website="https://tajhotels.com", website_score=85.0,
+    needs_website=False, generated_site_path=None, video_path=None, status="audited", job_id=1
 )
 ```
 
