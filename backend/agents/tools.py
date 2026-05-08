@@ -9,8 +9,11 @@ dispatch is a thin adapter only. All business logic lives in workers/.
 Lead ORM mismatch (workers expecting Lead ORM but Claude tool calls send dicts)
 is handled with a SimpleNamespace adapter.
 """
+import os
 from types import SimpleNamespace
 from pathlib import Path
+
+import httpx
 
 from config import settings
 from workers.discovery import fetch_google_places, fetch_serpapi
@@ -19,6 +22,30 @@ from workers.site_generator import generate_site_openai, generate_site_mock
 from workers.video_recorder import record_site_video
 from workers.message_composer import compose_with_openai, compose_mock
 from workers.whatsapp_sender import send_via_twilio, simulate_send
+
+# WhatsApp Web bridge (Node sidecar running whatsapp-web.js)
+WHATSAPP_BRIDGE_URL = os.environ.get("WHATSAPP_BRIDGE_URL", "http://localhost:8001")
+
+
+async def _bridge_status() -> dict:
+    """Returns {ready: bool, hasQr: bool, me: dict|None} or {error: ...}."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{WHATSAPP_BRIDGE_URL}/status")
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        return {"error": str(e), "ready": False}
+
+
+async def _bridge_send(phone: str, message: str, media_path: str | None = None) -> dict:
+    async with httpx.AsyncClient(timeout=60.0) as c:
+        r = await c.post(
+            f"{WHATSAPP_BRIDGE_URL}/send",
+            json={"phone": phone, "message": message, "mediaPath": media_path},
+        )
+        r.raise_for_status()
+        return r.json()
 
 
 TOOLS: list[dict] = [
@@ -112,15 +139,17 @@ TOOLS: list[dict] = [
     {
         "name": "send_whatsapp",
         "description": (
-            "Send a WhatsApp message via Twilio (or simulate if Twilio is not configured). "
-            "Returns a dict with sid and status."
+            "Send a WhatsApp message. Routing priority: (1) personal WhatsApp via Web bridge "
+            "if QR-paired, (2) Twilio if configured, (3) simulation. Pass video_path for "
+            "media attachments via the bridge."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "phone": {"type": "string", "description": "E.164 phone number, e.g. '+919876543210'"},
                 "message": {"type": "string"},
-                "video_url": {"type": "string"},
+                "video_url": {"type": "string", "description": "Public URL to video (Twilio path)"},
+                "video_path": {"type": "string", "description": "Local file path to video (bridge path)"},
             },
             "required": ["phone", "message"],
         },
@@ -193,8 +222,31 @@ async def dispatch(tool_name: str, tool_input: dict):
         phone = tool_input["phone"]
         message = tool_input["message"]
         video_url = tool_input.get("video_url")
+        media_path = tool_input.get("video_path") or tool_input.get("media_path")
+
+        # Priority 1: Node WhatsApp Web bridge (personal WhatsApp via QR pairing)
+        status = await _bridge_status()
+        if status.get("ready"):
+            try:
+                result = await _bridge_send(phone, message, media_path=media_path)
+                return {
+                    "sid": result.get("id", "WA_BRIDGE"),
+                    "status": result.get("status", "sent"),
+                    "via": "whatsapp_bridge",
+                }
+            except Exception as e:
+                # Fall through to next channel on failure
+                bridge_error = str(e)
+        else:
+            bridge_error = status.get("error", "bridge not connected")
+
+        # Priority 2: Twilio (if configured)
         if settings.is_real("twilio_account_sid") and settings.is_real("twilio_auth_token"):
             return await send_via_twilio(phone=phone, message=message, video_url=video_url)
-        return await simulate_send(phone=phone, message=message)
+
+        # Priority 3: simulation
+        result = await simulate_send(phone=phone, message=message)
+        result["bridge_error"] = bridge_error
+        return result
 
     raise ValueError(f"Unknown tool: {tool_name}")

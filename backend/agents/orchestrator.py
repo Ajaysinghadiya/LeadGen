@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from config import settings
 from database import AsyncSessionLocal
-from models import Job, Lead
+from models import Job, Lead, Outreach
 from agents.tools import TOOLS, dispatch
 
 
@@ -48,7 +48,29 @@ async def run_agent(lead: Lead, job_id: int,
     score = lead.website_score if lead.existing_website else 0.0
     score = score or 0.0
 
-    # Pre-flight skip — already audited as strong site
+    # Pre-flight skip #1 — phone already messaged in any prior job (dedup)
+    if lead.phone:
+        async with AsyncSessionLocal() as db:
+            dup = await db.execute(
+                select(Lead).join(Outreach, Outreach.lead_id == Lead.id).where(
+                    Lead.phone == lead.phone,
+                    Lead.id != lead.id,
+                    Outreach.whatsapp_status.in_(["sent", "delivered", "read"]),
+                )
+            )
+            if dup.scalars().first():
+                await _emit(
+                    broadcast, job_id, lead_id_str, "skip",
+                    f"{lead.business_name} ({lead.phone}) already contacted in earlier outreach. Skipping."
+                )
+                cur = await db.execute(select(Lead).where(Lead.id == lead.id))
+                db_lead = cur.scalar_one_or_none()
+                if db_lead:
+                    db_lead.status = "skipped"
+                    await db.commit()
+                return
+
+    # Pre-flight skip #2 — already audited as strong site
     if score > SEO_THRESHOLD:
         await _emit(
             broadcast, job_id, lead_id_str, "skip",

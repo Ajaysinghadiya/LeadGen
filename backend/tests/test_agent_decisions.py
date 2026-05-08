@@ -116,7 +116,12 @@ class _FakeAsyncCtxSession:
     async def execute(self, *a, **k):
         m = MagicMock()
         m.scalar_one_or_none = MagicMock(return_value=SimpleNamespace(status="x"))
-        m.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        # scalars() must return an obj with both .all() and .first() — first() is None
+        # so the dedup pre-flight check finds no prior outreach.
+        scalars_mock = MagicMock()
+        scalars_mock.all = MagicMock(return_value=[])
+        scalars_mock.first = MagicMock(return_value=None)
+        m.scalars = MagicMock(return_value=scalars_mock)
         return m
     async def commit(self): pass
 

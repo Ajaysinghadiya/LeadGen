@@ -10,7 +10,7 @@ from pathlib import Path
 
 from config import settings
 from database import init_db
-from routers import jobs, leads
+from routers import jobs, leads, whatsapp
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +50,7 @@ app.add_middleware(
 # Routers
 app.include_router(jobs.router)
 app.include_router(leads.router)
+app.include_router(whatsapp.router)
 
 
 @app.get("/health")

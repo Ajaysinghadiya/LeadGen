@@ -49,6 +49,21 @@ export async function getLead(leadId) {
   return apiFetch(`/leads/${leadId}`)
 }
 
+// ─── WhatsApp bridge ──────────────────────────────────────────────────────────
+
+export async function getWhatsAppStatus() {
+  return apiFetch('/whatsapp/status')
+}
+
+export function whatsAppQrUrl() {
+  // Cache-buster so the browser refetches as new QRs arrive
+  return `${API_BASE}/whatsapp/qr?t=${Date.now()}`
+}
+
+export async function whatsAppLogout() {
+  return apiFetch('/whatsapp/logout', { method: 'POST' })
+}
+
 // ─── SSE ──────────────────────────────────────────────────────────────────────
 
 export function watchJob(jobId, onEvent, onError) {

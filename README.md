@@ -2,12 +2,13 @@
 
 > **Agentic Lead Generation & Automated Outreach for Local Businesses**
 
-AI-powered system that finds local businesses without websites, generates custom site previews, records video tours, and sends personalized WhatsApp pitches — all orchestrated by a Claude SDK agent that reasons through each lead independently.
+AI-powered system that finds local businesses without websites, generates custom site previews, records video tours, and sends personalized WhatsApp pitches **from your personal WhatsApp number via QR pairing** — all orchestrated by a Claude SDK agent that reasons through each lead independently.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)](https://fastapi.tiangolo.com)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org)
 [![Claude](https://img.shields.io/badge/Claude-Sonnet%204.6-orange)](https://anthropic.com)
+[![WhatsApp](https://img.shields.io/badge/WhatsApp-Web%20Bridge-25D366)](https://github.com/pedroslopez/whatsapp-web.js)
 [![Status](https://img.shields.io/badge/v2-shipped-success)](#build-status)
 
 ---
@@ -15,11 +16,14 @@ AI-powered system that finds local businesses without websites, generates custom
 ## What It Does
 
 ```
-City + Category
+1. Open /whatsapp → scan QR with phone → pair personal WhatsApp
+2. City + Category form
       ↓
 [Claude Agent] → searches Google Places / SerpAPI for local businesses
       ↓
       → audits each existing website (0–100 score)
+      ↓
+      → dedup check: skip leads whose phone already received outreach
       ↓
       → reasons: "Does this business need help, and what kind?"
       ↓
@@ -28,33 +32,48 @@ City + Category
           30 ≤ s ≤ 60 → pitch "seo_pitch" → WhatsApp
           score > 60  → skip with explanation
       ↓
+Messages send from YOUR WhatsApp number via the Node bridge.
 Live Agent Thoughts panel streams reasoning + tool calls per lead.
 ```
 
 The agent is **not** a fixed pipeline. It reasons per lead, picks the right branch, and explains skips. Every text block becomes a "thought" event; every tool call becomes an "action" event; every result/error becomes a labeled SSE event for the dashboard.
 
+**Outreach uses your personal WhatsApp** via a Node sidecar running [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js). Pair once with a QR scan, and the agent sends from your number — no Twilio account, no business approval, no per-message fees. Twilio fallback still works if you prefer that route.
+
 ---
 
 ## Architecture
 
-### v2 — Agentic Layer (shipped)
+### v2 — Agentic Layer + WhatsApp Bridge (shipped)
 
 ```
-POST /jobs ─► routers/jobs.py ─► run_pipeline (background task)
-                                        │
-                                        ▼
-                       agents/orchestrator.py  (Claude SDK loop)
-                                        │
-            ┌───────────────────────────┼─────────────────────────────┐
-            ▼                           ▼                             ▼
-    agents/prompts/              agents/tools.py            mcp_servers/
-    system.md                    (TOOLS + dispatch)         (external API wrappers)
-    persona + branching          adapter to workers/        whatsapp_mcp.py
-                                        │                  serp_mcp.py
-                                        ▼
-                            backend/workers/  (locked, pure execution)
-                            discovery / auditor / site_generator /
-                            video_recorder / message_composer / whatsapp_sender
+              Browser :3000               Backend :8000               Bridge :8001
+                  │                            │                            │
+   POST /jobs ───►│                            │                            │
+                  │── /api/jobs ──────────────►│                            │
+                  │                            ▼                            │
+                  │              routers/jobs.py → run_pipeline             │
+                  │                            ▼                            │
+                  │              agents/orchestrator.py                     │
+                  │              (Claude SDK loop, dedup pre-flight)        │
+                  │                ┌───────────┼───────────┐                │
+                  │                ▼           ▼           ▼                │
+                  │      agents/prompts/   agents/      mcp_servers/        │
+                  │      system.md         tools.py     whatsapp_mcp.py     │
+                  │                        │            serp_mcp.py         │
+                  │                        ▼                                │
+                  │      backend/workers/ (locked execution)                │
+                  │      discovery / auditor / site_generator /             │
+                  │      video_recorder / message_composer / whatsapp_sender│
+                  │                            │                            │
+                  │                            │  send_whatsapp tool        │
+                  │                            └──── HTTP /send ───────────►│
+                  │                                                         │
+                  │◄── /api/whatsapp/qr ────── proxy ──── GET /qr ──────────│
+                  │◄── /api/whatsapp/status ── proxy ──── GET /status ──────│
+                  │                                                         │
+                  │                          whatsapp-web.js + LocalAuth ───┘
+                  │                          Node sidecar — personal WhatsApp via QR
 
     SSE event shape: {type, lead_id, content, timestamp}
     Types: thought | action | result | error | skip | done
@@ -64,9 +83,12 @@ POST /jobs ─► routers/jobs.py ─► run_pipeline (background task)
 
 - `workers/` is locked. Pure execution. Zero Anthropic imports.
 - `agents/tools.py` is a thin adapter only. `SimpleNamespace` shim for Lead-ORM functions.
+- WhatsApp send priority: **(1) bridge if paired → (2) Twilio if configured → (3) simulation**. Decided per-call in `tools.py` `send_whatsapp` dispatch.
+- Dedup runs as orchestrator pre-flight #1: phone-based `Outreach` lookup across all jobs blocks repeat messages.
 - MCP servers exist for **external** APIs only (Twilio, Google Places/SerpAPI). Internal Python is plain Claude SDK tools — no MCP overhead.
 - Background tasks create their own `AsyncSessionLocal()`. Request session is closed before the task runs.
 - SSE infrastructure (`_sse_queues`, `broadcast_event`) is reused — no second queue dict.
+- `WHATSAPP_BRIDGE_URL` is read from `os.environ` (NOT pydantic Settings — config.py is locked, and Settings forbids extras). Defaults to `http://localhost:8001`.
 
 ### v1 vs v2
 
@@ -74,6 +96,8 @@ POST /jobs ─► routers/jobs.py ─► run_pipeline (background task)
 |---|---|
 | Fixed order: discover → audit → generate → record → compose → send | Claude branches per lead based on score |
 | Every business gets identical treatment | Strong sites are skipped; medium pivots to SEO |
+| No dedup — same number could get hit on repeat jobs | Phone-based dedup pre-flight blocks repeat outreach |
+| Twilio-only send (paid, business approval) | Personal WhatsApp via QR bridge (free) — Twilio fallback |
 | Step events only | thought / action / result / error / skip events |
 | Zero reasoning visible | Agent Thoughts panel streams chain-of-thought |
 
@@ -91,7 +115,8 @@ v1 is preserved at `backend/workers/orchestrator.py` for reference but is no lon
 | **Backend** | [FastAPI](https://fastapi.tiangolo.com) + async SQLAlchemy 2.0 | REST + SSE streaming |
 | **Database** | SQLite (`aiosqlite`) | Jobs, leads, outreach |
 | **Browser Automation** | [Playwright](https://playwright.dev/python/) | Headless video recording |
-| **WhatsApp** | [Twilio](https://twilio.com) → simulation fallback | Outreach delivery |
+| **WhatsApp (primary)** | [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js) Node sidecar | Personal WhatsApp via QR pairing — free, no business approval |
+| **WhatsApp (fallback)** | [Twilio](https://twilio.com) → simulation | Used if bridge not paired |
 | **Discovery** | Google Places → SerpAPI → mock fallback | Find businesses by city + category |
 | **Frontend** | Next.js 15 (App Router) | Dashboard, job monitor, leads explorer |
 | **Protocol** | MCP (Model Context Protocol) | Standardize external API tools |
@@ -106,8 +131,8 @@ LeadGen/
 ├── backend/
 │   ├── agents/                          # Claude SDK agentic layer (v2)
 │   │   ├── __init__.py
-│   │   ├── orchestrator.py              # run_agent + run_job (SDK loop)
-│   │   ├── tools.py                     # 6 tool defs + dispatch()
+│   │   ├── orchestrator.py              # run_agent + run_job (SDK loop, dedup pre-flight)
+│   │   ├── tools.py                     # 6 tool defs + dispatch (bridge→twilio→simulate)
 │   │   └── prompts/
 │   │       └── system.md                # Orchestrator persona + branching rules
 │   │
@@ -127,7 +152,8 @@ LeadGen/
 │   │
 │   ├── routers/
 │   │   ├── jobs.py                      # Job CRUD + SSE stream + run_pipeline
-│   │   └── leads.py                     # Lead explorer + site/video preview
+│   │   ├── leads.py                     # Lead explorer + site/video preview
+│   │   └── whatsapp.py                  # Proxy /whatsapp/{status,qr,logout} → bridge
 │   │
 │   ├── tests/
 │   │   └── test_agent_decisions.py      # 3-lead branching test (mocked)
@@ -135,13 +161,19 @@ LeadGen/
 │   ├── main.py · models.py · schemas.py · config.py · database.py
 │   └── requirements.txt
 │
+├── whatsapp-bridge/                     # Node sidecar — whatsapp-web.js
+│   ├── server.js                        # Express + LocalAuth + /qr /send /status /logout
+│   ├── package.json                     # whatsapp-web.js, express, qrcode, cors
+│   └── .wwebjs_auth/                    # Persisted session (gitignored)
+│
 ├── frontend/
 │   ├── app/
 │   │   ├── page.js                      # Dashboard
 │   │   ├── jobs/[id]/page.js            # Two-column: leads + Agent Thoughts panel
-│   │   └── leads/page.js                # Lead explorer
-│   ├── components/Sidebar.js
-│   └── lib/api.js                       # apiFetch + watchJob (EventSource)
+│   │   ├── leads/page.js                # Lead explorer
+│   │   └── whatsapp/page.js             # QR pairing UI + status + disconnect
+│   ├── components/Sidebar.js            # Nav + live WhatsApp status dot
+│   └── lib/api.js                       # apiFetch + watchJob + getWhatsAppStatus
 │
 ├── .claude/                             # Claude Code config
 │   ├── agents/                          # Subagent specs (one per output file)
@@ -202,17 +234,21 @@ Outreach
 ### Prerequisites
 - Python 3.11+
 - Node.js 18+
-- Docker (optional, for Redis if you re-enable RQ)
+- Chromium (auto-installed by Playwright + whatsapp-web.js)
 
 ### 1. Environment (`.env`)
+
+The `.env` file lives at the repo root **and** is copied to `backend/.env` (config.py reads from CWD, which is `backend/` when uvicorn runs).
 
 | Key | Source | Required? |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) | **Yes** — orchestrator |
 | `GOOGLE_PLACES_API_KEY` | [Google Cloud Console](https://console.cloud.google.com) | No — mock fallback |
-| `SERPAPI_KEY` | [serpapi.com](https://serpapi.com) | No — secondary fallback |
-| `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) | No — template fallback |
-| `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` | [console.twilio.com](https://console.twilio.com) | No — simulation mode |
+| `SERPAPI_KEY` | [serpapi.com](https://serpapi.com) | No — secondary discovery source |
+| `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) | No — template fallback for site generation |
+| `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` | [console.twilio.com](https://console.twilio.com) | No — only used if WhatsApp bridge is not paired |
+
+> **Bridge URL:** Defaults to `http://localhost:8001`. To override, set `WHATSAPP_BRIDGE_URL` as a **shell** env var **before** starting uvicorn — do not put it in `.env` (pydantic Settings forbids extras since `config.py` is locked).
 
 Without `ANTHROPIC_API_KEY` the agent loop returns 401 on first turn. Workers' OpenAI/Twilio/Google fallbacks still work standalone.
 
@@ -242,7 +278,19 @@ npm run dev
 
 Dashboard: http://localhost:3000
 
-### 4. (Optional) MCP servers as standalone
+### 4. WhatsApp bridge (Node sidecar)
+
+```bash
+cd whatsapp-bridge
+npm install                # First time only
+npm start                  # Listens on :8001
+```
+
+Pair once at **http://localhost:3000/whatsapp** — scan the QR with your phone (WhatsApp → Settings → Linked Devices → Link a Device). Session is persisted in `whatsapp-bridge/.wwebjs_auth/` (gitignored), so you only scan once per machine.
+
+When paired, the agent's `send_whatsapp` tool routes through the bridge automatically. If the bridge is down or unpaired, it falls back to Twilio (if configured), then to simulation.
+
+### 5. (Optional) MCP servers as standalone
 
 ```bash
 python -m mcp_servers.whatsapp_mcp     # stdio MCP for Twilio
@@ -253,16 +301,17 @@ python -m mcp_servers.serp_mcp         # stdio MCP for Google Places / SerpAPI
 
 ## Usage
 
-1. Open http://localhost:3000
-2. Create a job: city (e.g. `Jaipur`) + category (e.g. `sweet shop`)
-3. Open the job page — left column shows leads, right column shows **Agent Thoughts**:
+1. Boot all 3 servers (backend :8000, frontend :3000, bridge :8001).
+2. Open **http://localhost:3000/whatsapp** — scan the QR with your phone (WhatsApp → Settings → Linked Devices → Link a Device). The sidebar dot turns green when paired.
+3. Go to dashboard → create a job: city (e.g. `Jaipur`) + category (e.g. `sweet shop`).
+4. Open the job page — left column shows leads, right column shows **Agent Thoughts**:
    - 💭 yellow rows = reasoning (text blocks)
    - ⚙️ blue rows = tool calls (mono)
    - ✓ green rows = tool results (truncated 150 chars)
    - ⚠ red rows = errors
-   - ↷ gray rows = skips (strong sites)
-4. Watch the agent decide per lead. Skip → SEO pitch → full build are all visible live.
-5. Generated HTML and WEBM tours are linked off the leads explorer.
+   - ↷ gray rows = skips (strong sites OR phone already contacted)
+5. Watch the agent decide per lead. Skip → SEO pitch → full build are all visible live.
+6. Messages send from your personal WhatsApp. Generated HTML and WEBM tours are linked off the leads explorer.
 
 ---
 
@@ -313,15 +362,19 @@ This repo is built with Claude Code subagents/skills/hooks under `.claude/`.
 
 ## Build Status
 
-v2 agentic layer: **shipped**.
+v2 agentic layer + WhatsApp Web bridge: **shipped**.
 
 - [x] `backend/agents/__init__.py` + `agents/prompts/system.md`
-- [x] `backend/agents/tools.py` (6 tools, dispatch with SimpleNamespace adapter)
-- [x] `backend/agents/orchestrator.py` (run_agent + run_job, break-after-tool-call loop)
+- [x] `backend/agents/tools.py` (6 tools, dispatch with SimpleNamespace adapter, bridge-first send routing)
+- [x] `backend/agents/orchestrator.py` (run_agent + run_job, break-after-tool-call loop, dedup pre-flight)
 - [x] `backend/mcp_servers/whatsapp_mcp.py` + `serp_mcp.py`
 - [x] `backend/routers/jobs.py` swap to `agents.orchestrator.run_job`
+- [x] `backend/routers/whatsapp.py` — `/whatsapp/{status,qr,logout}` proxy to bridge
+- [x] `whatsapp-bridge/` — Node sidecar (whatsapp-web.js + LocalAuth + Express)
 - [x] `frontend/app/jobs/[id]/page.js` two-column layout + Agent Thoughts panel
-- [x] `backend/tests/test_agent_decisions.py` — 10/10 decision checks pass
+- [x] `frontend/app/whatsapp/page.js` — QR pairing UI + status polling
+- [x] `frontend/components/Sidebar.js` — live WhatsApp status dot
+- [x] `backend/tests/test_agent_decisions.py` — 10/10 decision checks pass (incl. dedup)
 
 ---
 

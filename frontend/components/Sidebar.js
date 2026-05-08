@@ -1,6 +1,8 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useEffect, useState } from 'react'
+import { getWhatsAppStatus } from '../lib/api'
 
 const NAV_ITEMS = [
   { href: '/', icon: '⚡', label: 'Dashboard' },
@@ -9,10 +11,36 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const [waStatus, setWaStatus] = useState({ ready: false, hasQr: false, bridge_down: false })
+
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const s = await getWhatsAppStatus()
+        if (!cancelled) setWaStatus(s)
+      } catch {
+        if (!cancelled) setWaStatus({ ready: false, hasQr: false, bridge_down: true })
+      }
+    }
+    tick()
+    const i = setInterval(tick, 5000)
+    return () => { cancelled = true; clearInterval(i) }
+  }, [])
+
   const isActive = (href) => {
     if (href === '/') return pathname === '/'
     return pathname.startsWith(href)
   }
+
+  const waColor = waStatus.bridge_down ? '#94a3b8'
+                : waStatus.ready ? '#22c55e'
+                : waStatus.hasQr ? '#eab308'
+                : '#ef4444'
+  const waLabel = waStatus.bridge_down ? 'Bridge offline'
+                : waStatus.ready ? 'Connected'
+                : waStatus.hasQr ? 'Scan QR'
+                : 'Disconnected'
 
   return (
     <aside className="sidebar">
@@ -32,6 +60,25 @@ export default function Sidebar() {
             {item.label}
           </Link>
         ))}
+
+        <Link
+          href="/whatsapp"
+          className={`sidebar-nav-item ${isActive('/whatsapp') ? 'active' : ''}`}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <span style={{ display: 'flex', alignItems: 'center' }}>
+            <span className="nav-icon">📱</span>
+            WhatsApp
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: waColor,
+              boxShadow: waStatus.ready ? '0 0 6px rgba(34,197,94,0.6)' : 'none',
+            }} />
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{waLabel}</span>
+          </span>
+        </Link>
 
         <div className="section-divider" style={{ margin: '0.75rem 0' }} />
         <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -58,8 +105,8 @@ export default function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        LeadGen v1.0<br />
-        © 2025
+        LeadGen v2.0<br />
+        © 2026
       </div>
     </aside>
   )

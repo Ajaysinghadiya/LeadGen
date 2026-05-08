@@ -1,0 +1,17 @@
+{
+  "name": "leadgen-whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "WhatsApp Web bridge — QR pairing + send for LeadGen",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "whatsapp-web.js": "^1.26.0",
+    "qrcode": "^1.5.4",
+    "cors": "^2.8.5"
+  }
+}
