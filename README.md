@@ -123,13 +123,54 @@ All three emit `cost_saved` SSE events into the Agent Thoughts panel so you can 
 
 ---
 
+## Site Archetypes (added 2026-05-08)
+
+The single generic Inter+orange template was replaced by **6 distinctive archetype templates**, each with its own font pair, palette pool, headline pool, and signature design move. Routing is automatic: `lead.category` → archetype → palette variation picked from `hash(business_name)`.
+
+**Why this exists.** I analyzed 29 reference sites in `data/Sample_Webages/` and found that ~90% converged on `Cormorant Garamond + Montserrat + cream-bg-with-gold-accent`. That convergence IS the AI-slop baseline. To stand out, archetypes deliberately avoid those choices.
+
+| Archetype | Categories | Display + Body Font | Signature move |
+|---|---|---|---|
+| `playful_mithai` | sweets, mithai, farsan, halwai, bakery | Yeseva One + Quicksand | Floating SVG paisley orbs, "Made fresh daily" marquee strip |
+| `luxury_textile` | silk, saree, sari, patola, handloom | Italiana + Spectral | Vertical Roman-numeral ticker w/ cross-dissolve animation |
+| `modern_salon_boutique` | salon, parlour, boutique, tailor, fashion (default) | Fraunces (var opsz) + DM Sans | Diagonal-clip image column, gold underline-on-hover |
+| `artisan_craft` | pattachitra, thanka, painter, sculptor, handicraft | Cormorant Infant + Crimson Pro | Hand-drawn SVG ornament corners, kerned all-caps eyebrow |
+| `event_occasion` | mehndi, henna, wedding, academy, courses | Tenor Sans + Italiana + DM Sans | Radial gold pulse behind name, henna-pattern SVG underline animating in |
+| `luxury_jewellery` | jeweller, gold, diamond, bridal jewellery | Marcellus + Outfit | 16-ray sun-burst SVG behind name, gold cursor-dot follower |
+
+**Per-lead variation.** Each archetype carries 3 palette pools + 5 headline alts + 5 lede alts. `seed = sum(ord(c) for c in business_name) % pool_size` picks one slot. Two sweet shops in the same city render with different palette + headline + lede — no twin pages.
+
+**Routing.** `agents/archetype_router.py` matches keywords on word-prefix boundaries (so `jewell` catches `jewellery`, `jeweller`, etc.). Fallback: `modern_salon_boutique`. 15/15 sanity examples pass.
+
+**Files.**
+```
+backend/agents/site_archetypes/
+├── __init__.py                # registry + render_for_lead(archetype, lead)
+├── _common.py                 # variation_seed, render_template helper, grain SVG
+├── playful_mithai.py
+├── luxury_textile.py
+├── modern_salon_boutique.py
+├── artisan_craft.py
+├── event_occasion.py
+└── luxury_jewellery.py
+backend/agents/archetype_router.py    # category → archetype + EXAMPLES table
+backend/scripts/render_archetype_demos.py   # render demo HTML per archetype
+docs/design_archetypes.md             # full spec + sample-cluster analysis
+```
+
+**Pipeline integration.** `template_cache.render_site` defaults to the archetype path — free, deterministic, distinctive. The legacy AI/mock path is kept behind `LEADGEN_USE_LEGACY_TEMPLATE=1` for fallback.
+
+**Render demos.** `python backend/scripts/render_archetype_demos.py` writes one demo HTML per archetype to `data/generated_sites/demo_{archetype}.html`. Open in browser to compare.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology | Purpose |
 |---|---|---|
 | **AI Orchestration** | [Anthropic Claude SDK](https://github.com/anthropics/anthropic-sdk-python) | Agentic loop, reasoning, tool dispatch |
 | **AI Model** | `claude-sonnet-4-6` | Per-lead orchestration |
-| **Site Generation** | OpenAI GPT-4o-mini → template fallback | Generate HTML site previews |
+| **Site Generation** | 6 archetype templates → OpenAI fallback | Distinctive per-category HTML site previews |
 | **Backend** | [FastAPI](https://fastapi.tiangolo.com) + async SQLAlchemy 2.0 | REST + SSE streaming |
 | **Database** | SQLite (`aiosqlite`) | Jobs, leads, outreach |
 | **Browser Automation** | [Playwright](https://playwright.dev/python/) | Headless video recording |
@@ -151,8 +192,22 @@ LeadGen/
 │   │   ├── __init__.py
 │   │   ├── orchestrator.py              # run_agent + run_job (SDK loop, dedup pre-flight)
 │   │   ├── tools.py                     # 6 tool defs + dispatch (bridge→twilio→simulate)
+│   │   ├── template_cache.py            # archetype-first; legacy AI/mock fallback
+│   │   ├── archetype_router.py          # category → archetype slug
+│   │   ├── site_archetypes/             # 6 distinctive site templates
+│   │   │   ├── __init__.py              # registry + render_for_lead
+│   │   │   ├── _common.py               # variation_seed + render helpers
+│   │   │   ├── playful_mithai.py        # sweets · Yeseva One + Quicksand
+│   │   │   ├── luxury_textile.py        # silk/saree · Italiana + Spectral
+│   │   │   ├── modern_salon_boutique.py # salon/boutique · Fraunces + DM Sans
+│   │   │   ├── artisan_craft.py         # artist/craft · Cormorant Infant + Crimson Pro
+│   │   │   ├── event_occasion.py        # mehndi/event · Tenor Sans + Italiana
+│   │   │   └── luxury_jewellery.py      # jewellery · Marcellus + Outfit
 │   │   └── prompts/
 │   │       └── system.md                # Orchestrator persona + branching rules
+│   │
+│   ├── scripts/
+│   │   └── render_archetype_demos.py    # Render one demo per archetype
 │   │
 │   ├── workers/                         # Pure execution (locked)
 │   │   ├── orchestrator.py              # v1 linear pipeline (kept for reference)
@@ -212,7 +267,10 @@ LeadGen/
 │   └── settings.json
 │
 ├── CLAUDE.md                            # Project brain — loaded every session
+├── docs/
+│   └── design_archetypes.md             # 6-archetype spec + sample-cluster analysis
 ├── data/                                # Runtime (gitignored): leadgen.db, sites, videos
+│   └── Sample_Webages/                  # Reference HTML files used for archetype DNA
 ├── docker-compose.yml
 └── README.md
 ```
@@ -385,7 +443,9 @@ v2 agentic layer + WhatsApp Web bridge + cost controls: **shipped**.
 - [x] `backend/agents/__init__.py` + `agents/prompts/system.md`
 - [x] `backend/agents/tools.py` (6 tools, dispatch with SimpleNamespace adapter, bridge-first send routing, template-cache integration)
 - [x] `backend/agents/orchestrator.py` (Claude SDK loop + 24h TTL + phone dedup + max_leads cap + cost_saved SSE)
-- [x] `backend/agents/template_cache.py` — AI-once-per-category for site HTML and message text
+- [x] `backend/agents/template_cache.py` — archetype-first site rendering; AI/mock cache for messages
+- [x] `backend/agents/site_archetypes/` — 6 distinctive archetype templates (Yeseva/Italiana/Fraunces/Cormorant Infant/Tenor Sans/Marcellus)
+- [x] `backend/agents/archetype_router.py` — category → archetype routing (15/15 examples pass)
 - [x] `backend/mcp_servers/whatsapp_mcp.py` + `serp_mcp.py`
 - [x] `backend/routers/jobs.py` swap to `agents.orchestrator.run_job`, accepts `max_leads` + `force_refresh`
 - [x] `backend/routers/whatsapp.py` — `/whatsapp/{status,qr,logout}` proxy to bridge

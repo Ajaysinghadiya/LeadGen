@@ -26,6 +26,11 @@ from types import SimpleNamespace
 from config import settings
 from workers.site_generator import generate_site_openai, generate_site_mock
 from workers.message_composer import compose_with_openai, compose_mock
+from agents.archetype_router import route as route_archetype
+from agents.site_archetypes import (
+    render_for_lead as render_archetype_for_lead,
+    variation_seed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +116,20 @@ def _substitute_site(template: str, lead_dict: dict) -> str:
 
 
 async def render_site(lead_dict: dict) -> tuple[str, bool]:
-    """Returns (html, cache_hit). cache_hit=True means no AI call was made for this lead."""
+    """Returns (html, cache_hit).
+
+    Archetype path (default): pick archetype from category, pick palette
+    variation from hash(business_name), substitute. No AI cost. cache_hit=True.
+
+    Legacy AI/mock path: kept behind LEADGEN_USE_LEGACY_TEMPLATE=1 so
+    existing tests / cache-fallback behaviour is preserved.
+    """
+    if not os.environ.get("LEADGEN_USE_LEGACY_TEMPLATE"):
+        archetype = route_archetype(lead_dict.get("category"))
+        html, _palette_idx = render_archetype_for_lead(archetype, lead_dict)
+        return html, True  # archetype render is deterministic & free — counts as a hit
+
+    # ── Legacy path ────────────────────────────────────────────────
     category = lead_dict.get("category") or "default"
     cache_path = _site_template_dir() / f"{_slug(category)}.html"
 

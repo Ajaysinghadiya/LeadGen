@@ -69,10 +69,18 @@
       "Bash(curl -s -X POST http://localhost:8000/jobs/ -H \"Content-Type: application/json\" -d '{\"city\":\"Pune\",\"category\":\"gym\",\"max_leads\":15}')",
       "Bash(awk -F= '{print $1, \\($2 == \"\" ? \"EMPTY\" : \"SET\"\\)}')",
       "Bash(curl -s http://localhost:8000/jobs/2)",
-      "Bash(curl -s \"http://localhost:8000/leads/?job_id=2&page_size=30\")"
+      "Bash(curl -s \"http://localhost:8000/leads/?job_id=2&page_size=30\")",
+      "Bash(find \"C:/Users/91809/.claude\" -type d -iname \"*frontend*\" 2>/dev/null | head -20)",
+      "Read(//c/Users/91809/.claude/**)",
+      "Bash(find \"C:/Users/91809/.claude/plugins\" -maxdepth 5 -type d 2>/dev/null | head -40)",
+      "Read(//c/Users/91809/.claude/plugins/**)",
+      "Bash(rm -f \"c:/Users/91809/Desktop/All Antigravity/LeadGen/data/site_templates/\"*.html 2>/dev/null; ls \"c:/Users/91809/Desktop/All Antigravity/LeadGen/data/site_templates/\" 2>/dev/null; echo \"---\"; ls \"c:/Users/91809/Desktop/All Antigravity/LeadGen/data/\" 2>/dev/null)",
+      "Bash(awk '{print $5, $NF}')",
+      "PowerShell(python \"c:\\\\Users\\\\91809\\\\Desktop\\\\All Antigravity\\\\LeadGen\\\\backend\\\\scripts\\\\render_archetype_demos.py\")"
     ],
     "additionalDirectories": [
-      "c:\\Users\\91809\\Desktop\\All Antigravity\\LeadGen\\.claude"
+      "c:\\Users\\91809\\Desktop\\All Antigravity\\LeadGen\\.claude",
+      "c:\\Users\\91809\\Desktop\\All Antigravity\\LeadGen\\data\\site_templates"
     ]
   }
 }
