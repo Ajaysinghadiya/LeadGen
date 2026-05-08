@@ -181,14 +181,16 @@ async def dispatch(tool_name: str, tool_input: dict):
         # Cache-first: AI generates ONE template per category, code substitutes per lead.
         html, cache_hit = await render_site(tool_input)
         LAST_CACHE_HIT["generate_site"] = cache_hit
-        sites_dir = Path(settings.generated_sites_dir)
+        sites_dir = Path(settings.generated_sites_dir).resolve()
         sites_dir.mkdir(parents=True, exist_ok=True)
         site_path = sites_dir / f"lead_{tool_input['lead_id']}.html"
         site_path.write_text(html, encoding="utf-8")
+        # Return absolute path — the WhatsApp bridge runs from a different CWD
+        # and needs to resolve this file via fs.existsSync().
         return str(site_path)
 
     if tool_name == "record_video":
-        videos_dir = Path(settings.videos_dir)
+        videos_dir = Path(settings.videos_dir).resolve()
         videos_dir.mkdir(parents=True, exist_ok=True)
         video_path = str(videos_dir / f"lead_{tool_input['lead_id']}.webm")
         ok = await record_site_video(
@@ -196,6 +198,7 @@ async def dispatch(tool_name: str, tool_input: dict):
             video_path=video_path,
             business_name=tool_input["business_name"],
         )
+        # Absolute path so the bridge (different CWD) can find it for media attachment.
         return {"success": bool(ok), "video_path": video_path if ok else None}
 
     if tool_name == "compose_message":

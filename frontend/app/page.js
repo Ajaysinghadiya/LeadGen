@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
-import { createJob, getJobs } from '../lib/api'
+import { createJob, getJobs, getWhatsAppStatus } from '../lib/api'
 
 function formatRelativeTime(dateString) {
   const date = new Date(dateString)
@@ -108,6 +108,7 @@ export default function DashboardPage() {
   const [jobs, setJobs] = useState([])
   const [jobsLoading, setJobsLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [waStatus, setWaStatus] = useState({ ready: true, hasQr: false, bridge_down: false })
 
   const loadJobs = useCallback(async () => {
     try {
@@ -125,6 +126,22 @@ export default function DashboardPage() {
     const interval = setInterval(loadJobs, 5000)
     return () => clearInterval(interval)
   }, [loadJobs])
+
+  // Poll WhatsApp bridge so we can show a warning if not paired.
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const s = await getWhatsAppStatus()
+        if (!cancelled) setWaStatus(s)
+      } catch {
+        if (!cancelled) setWaStatus({ ready: false, hasQr: false, bridge_down: true })
+      }
+    }
+    tick()
+    const i = setInterval(tick, 5000)
+    return () => { cancelled = true; clearInterval(i) }
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -181,6 +198,45 @@ export default function DashboardPage() {
             <div className="stat-card-value orange">{activeJobs}</div>
           </div>
         </div>
+
+        {/* WhatsApp pair warning — soft gate for stage 0 of the pipeline */}
+        {!waStatus.ready && (
+          <div style={{
+            background: waStatus.bridge_down ? 'rgba(148,163,184,0.10)' : 'rgba(234,179,8,0.10)',
+            border: `1px solid ${waStatus.bridge_down ? 'rgba(148,163,184,0.30)' : 'rgba(234,179,8,0.35)'}`,
+            borderRadius: 'var(--radius)',
+            padding: '0.85rem 1rem',
+            marginBottom: '1rem',
+            color: waStatus.bridge_down ? 'var(--text-secondary)' : '#fde68a',
+            fontSize: '0.88rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+          }}>
+            <span style={{ fontSize: '1.2rem' }}>{waStatus.bridge_down ? '⚙️' : '⚠️'}</span>
+            <div style={{ flex: 1 }}>
+              <strong>
+                {waStatus.bridge_down
+                  ? 'WhatsApp bridge offline'
+                  : waStatus.hasQr
+                    ? 'WhatsApp not paired yet'
+                    : 'WhatsApp not connected'}
+              </strong>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                {waStatus.bridge_down
+                  ? 'Start the Node sidecar (cd whatsapp-bridge && npm start) before sending real messages. Jobs will fall back to simulation mode.'
+                  : 'Pair your phone before starting a job — otherwise outreach will be simulated, not actually sent.'}
+              </div>
+            </div>
+            <Link
+              href="/whatsapp"
+              className="btn btn-ghost"
+              style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', whiteSpace: 'nowrap' }}
+            >
+              {waStatus.hasQr ? 'Scan QR →' : 'Open WhatsApp →'}
+            </Link>
+          </div>
+        )}
 
         {/* Search form */}
         <div className="search-form">
