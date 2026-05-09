@@ -10,6 +10,7 @@ Lead ORM mismatch (workers expecting Lead ORM but Claude tool calls send dicts)
 is handled with a SimpleNamespace adapter.
 """
 import os
+import re
 from pathlib import Path
 
 import httpx
@@ -23,6 +24,24 @@ from agents.template_cache import render_site, render_message
 
 # Surface last cache hit to the orchestrator so it can emit a cost_saved SSE event.
 LAST_CACHE_HIT: dict = {"generate_site": None, "compose_message": None}
+
+
+def _safe_filename(business_name: str | None, lead_id: int, suffix: str, ext: str) -> str:
+    """Build a cross-platform safe filename: <Business_Name>_<suffix>_<lead_id>.<ext>
+
+    - Strips Windows-illegal chars (\\ / : * ? " < > |) and control chars
+    - Replaces whitespace runs with single underscore
+    - Caps the business-name portion at 80 chars
+    - lead_id suffix prevents collisions when two leads share a business name
+    """
+    raw = (business_name or "lead").strip()
+    raw = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", raw)   # illegal + control
+    raw = re.sub(r"\s+", "_", raw)                    # spaces → underscore
+    raw = re.sub(r"_+", "_", raw).strip("_")          # collapse repeats
+    if not raw:
+        raw = "lead"
+    raw = raw[:80]
+    return f"{raw}_{suffix}_{lead_id}.{ext}"
 
 # WhatsApp Web bridge (Node sidecar running whatsapp-web.js)
 WHATSAPP_BRIDGE_URL = os.environ.get("WHATSAPP_BRIDGE_URL", "http://localhost:8001")
@@ -183,7 +202,14 @@ async def dispatch(tool_name: str, tool_input: dict):
         LAST_CACHE_HIT["generate_site"] = cache_hit
         sites_dir = Path(settings.generated_sites_dir).resolve()
         sites_dir.mkdir(parents=True, exist_ok=True)
-        site_path = sites_dir / f"lead_{tool_input['lead_id']}.html"
+        # Human-readable filename: <Business_Name>_demo_<lead_id>.html
+        fname = _safe_filename(
+            tool_input.get("business_name"),
+            int(tool_input["lead_id"]),
+            "demo",
+            "html",
+        )
+        site_path = sites_dir / fname
         site_path.write_text(html, encoding="utf-8")
         # Return absolute path — the WhatsApp bridge runs from a different CWD
         # and needs to resolve this file via fs.existsSync().
@@ -192,7 +218,14 @@ async def dispatch(tool_name: str, tool_input: dict):
     if tool_name == "record_video":
         videos_dir = Path(settings.videos_dir).resolve()
         videos_dir.mkdir(parents=True, exist_ok=True)
-        video_path = str(videos_dir / f"lead_{tool_input['lead_id']}.webm")
+        # Human-readable filename: <Business_Name>_recording_demo_<lead_id>.webm
+        fname = _safe_filename(
+            tool_input.get("business_name"),
+            int(tool_input["lead_id"]),
+            "recording_demo",
+            "webm",
+        )
+        video_path = str(videos_dir / fname)
         ok = await record_site_video(
             html_path=tool_input["html_path"],
             video_path=video_path,

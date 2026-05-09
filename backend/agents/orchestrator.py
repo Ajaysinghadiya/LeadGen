@@ -90,15 +90,29 @@ async def run_agent(lead: Lead, job_id: int,
 
     sent = False
     skipped = False
+    cache_read_total = 0
+    cache_write_total = 0
 
     for _ in range(MAX_TURNS):
         response = await client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            # Cache breakpoint on system → covers tools + system (~1.2K tokens).
+            # Cache write = 1.25× input price ONCE; reads = 0.10× thereafter.
+            # 5-min TTL refreshes on every hit, so sequential leads stay warm.
+            system=[{
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
             tools=TOOLS,
             messages=messages,
         )
+
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            cache_write_total += getattr(usage, "cache_creation_input_tokens", 0) or 0
+            cache_read_total += getattr(usage, "cache_read_input_tokens", 0) or 0
 
         tool_call_made = False
         for block in response.content:
@@ -153,6 +167,15 @@ async def run_agent(lead: Lead, job_id: int,
     else:
         await _emit(broadcast, job_id, lead_id_str, "error",
                     f"agent loop hit MAX_TURNS={MAX_TURNS}")
+
+    if cache_read_total or cache_write_total:
+        # Cost delta: cached read at $0.30/M vs uncached at $3/M  → save $2.70/M.
+        saved_usd = (cache_read_total * 2.70) / 1_000_000
+        await _emit(
+            broadcast, job_id, lead_id_str, "result",
+            f"💰 prompt_cache: write={cache_write_total} read={cache_read_total} tok "
+            f"(~${saved_usd:.4f} saved this lead)"
+        )
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Lead).where(Lead.id == lead.id))

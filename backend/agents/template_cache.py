@@ -142,51 +142,29 @@ async def render_site(lead_dict: dict) -> tuple[str, bool]:
     return _substitute_site(template, lead_dict), False
 
 
-# ─── Message templates ───────────────────────────────────────────────────────
+# ─── Message templates (LOCKED — no AI freestyle) ───────────────────────────
+#
+# Two fixed templates. compose_message tool returns one of these verbatim with
+# {name} substituted. Locked at ~40-50 words for WhatsApp readability.
+# Price ₹5,000 hardcoded — change here if pricing ever changes.
 
-MESSAGE_PLACEHOLDERS = {
-    "business_name": "__BIZ_NAME__",
-    "category": "__BIZ_CATEGORY__",
-    "city": "__BIZ_CITY__",
-}
+BUILD_SITE_TEMPLATE = (
+    "Hi there! I've created a demo website for {name} after seeing your great "
+    "feedback on Google — see a test video. Your brand deserves a top-tier site! "
+    "I can finalize and launch this for you in 48 hours for just ₹5,000. Interested?"
+)
 
-
-async def _generate_message_template(category: str, approach: str) -> str:
-    placeholder_lead = SimpleNamespace(
-        id=0,
-        business_name=MESSAGE_PLACEHOLDERS["business_name"],
-        category=category,
-        city=MESSAGE_PLACEHOLDERS["city"],
-        approach=approach,
-    )
-
-    if settings.is_real("openai_api_key"):
-        try:
-            return await compose_with_openai(placeholder_lead)
-        except Exception as e:
-            logger.warning(f"OpenAI message template failed for ({category},{approach}): {e}. Using mock.")
-
-    return compose_mock(placeholder_lead)
-
-
-def _substitute_message(template: str, lead_dict: dict) -> str:
-    out = template
-    out = out.replace(MESSAGE_PLACEHOLDERS["business_name"], str(lead_dict.get("business_name", "")))
-    out = out.replace(MESSAGE_PLACEHOLDERS["category"],      str(lead_dict.get("category", "")))
-    out = out.replace(MESSAGE_PLACEHOLDERS["city"],          str(lead_dict.get("city", "")))
-    return out
+SEO_PITCH_TEMPLATE = (
+    "Hi there! Saw your existing site for {name} — strong reviews on Google but "
+    "missing key SEO basics hurting your ranking. I can fix metadata, mobile speed, "
+    "and structure in 48 hours for just ₹5,000. Interested?"
+)
 
 
 async def render_message(lead_dict: dict) -> tuple[str, bool]:
-    """Returns (message, cache_hit). cache_hit=True means no AI call this lead."""
-    category = lead_dict.get("category") or "default"
+    """Returns (message, cache_hit=True). No AI call — message is locked template
+    with business_name substituted. approach picks build_site vs seo_pitch wording."""
+    name = lead_dict.get("business_name") or "your business"
     approach = lead_dict.get("approach") or "build_site"
-    cache_path = _message_template_dir() / f"{_slug(category)}__{_slug(approach)}.txt"
-
-    if cache_path.exists():
-        template = cache_path.read_text(encoding="utf-8")
-        return _substitute_message(template, lead_dict), True
-
-    template = await _generate_message_template(category, approach)
-    _atomic_write(cache_path, template)
-    return _substitute_message(template, lead_dict), False
+    template = SEO_PITCH_TEMPLATE if approach == "seo_pitch" else BUILD_SITE_TEMPLATE
+    return template.format(name=name), True

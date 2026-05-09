@@ -16,7 +16,8 @@ AI-powered system that finds local businesses without websites, generates custom
 ## What It Does
 
 ```
-1. Open /whatsapp → scan QR with phone → pair personal WhatsApp
+1. Land on dashboard → WhatsAppGate blocks UI → scan QR with phone → pair
+   (or click "Continue in simulate mode" to bypass for dev/demo)
 2. City + Category form
       ↓
 [Claude Agent] → searches Google Places / SerpAPI for local businesses
@@ -99,7 +100,8 @@ The agent is **not** a fixed pipeline. It reasons per lead, picks the right bran
 | No dedup — same number could get hit on repeat jobs | Phone dedup runs **before** agent loop (no Anthropic spend on duplicates) |
 | Re-discovery on every run — wasted SerpAPI calls | 24h TTL reuses leads from a recent matching job — `force_refresh` to override |
 | No lead cap — pipeline burns through whatever the API returned | `max_leads` per-job cap (UI dropdown 10/20/25/30/35/50, default 25) |
-| AI generates a site **per lead** — 30 leads = 30 OpenAI calls | AI generates **one template per category**; code substitutes per lead. Same for message templates |
+| AI generates a site **per lead** — 30 leads = 30 OpenAI calls | Sites: 6 archetype templates (no AI). Messages: 2 locked templates with `{name}` substitution (no AI) |
+| Re-uploads system prompt + tool schemas every API call | **Prompt caching** on (system + tools) — first call writes, rest read at 90% off |
 | Twilio-only send (paid, business approval) | Personal WhatsApp via QR bridge (free) — Twilio fallback |
 | Step events only | thought / action / result / error / skip / **cost_saved** events |
 | Zero reasoning visible | Agent Thoughts panel streams chain-of-thought |
@@ -108,18 +110,71 @@ v1 is preserved at `backend/workers/orchestrator.py` for reference but is no lon
 
 ### Cost controls (added 2026-05)
 
-Three layers protect API spend, in this order:
+Four layers protect API spend, in this order:
 
 1. **24h discovery TTL** — `_maybe_reuse_recent_leads` in orchestrator. If the same `(city, category)` ran in the last 24h, clone its leads instead of refetching from SerpAPI. Toggleable per job via `force_refresh`.
 2. **Phone dedup** — `_phone_dedup` runs after discovery, before the agent loop. Marks leads `status="duplicate"` when the phone matches any earlier `Lead.phone` in any other job. Saves Anthropic tokens (the most expensive part).
 3. **`max_leads` cap** — slices the eligible-lead list to the per-job cap before the agent loop. UI shows `Max Leads` dropdown on dashboard. Lower cap → less spend.
+4. **Prompt caching** (added 2026-05-09) — `cache_control: {"type": "ephemeral"}` on the system prompt creates a single cache breakpoint covering both tools (~600 tok) and system prompt (~600 tok). First call writes at 1.25× input price; every subsequent call reads at 0.10× (90% off). 5-min TTL refreshes on each hit, so sequential leads stay warm. Saves ~40% of the per-job Anthropic bill (e.g. $0.09 / 5 leads, $19 / 1k leads). Per-lead totals emitted as `💰 prompt_cache: write=X read=Y tok (~$Z saved this lead)` SSE events.
 
-All three emit `cost_saved` SSE events into the Agent Thoughts panel so you can see what each layer saved per job.
+All four emit `cost_saved` / `prompt_cache` SSE events into the Agent Thoughts panel so you can see what each layer saved per job.
 
 **Template cache (`agents/template_cache.py`):**
-- `data/site_templates/{category}.html` — one HTML template per category, generated once via OpenAI with `__BIZ_NAME__` / `__BIZ_CITY__` etc. placeholders. Subsequent leads in the same category use simple `str.replace` substitution. Zero AI cost on cache hits.
-- `data/message_templates/{category}__{approach}.txt` — same pattern for outreach text. Cache key = `(category, approach)`.
-- Wipe `data/site_templates/` or `data/message_templates/` to force regeneration (e.g., when prompt changes).
+- **Site templates** — `render_site` uses the archetype path by default (free, deterministic). Legacy AI/mock path kept behind `LEADGEN_USE_LEGACY_TEMPLATE=1` for fallback; cached at `data/site_templates/{category}.html`.
+- **Message templates** (locked 2026-05-09) — `render_message` returns one of two **hardcoded** templates (`BUILD_SITE_TEMPLATE`, `SEO_PITCH_TEMPLATE`) with `{name}` substituted. NO AI call ever; price ₹5,000 hardcoded; ~40-50 words each for WhatsApp readability. Edit the constants at the top of `template_cache.py` to change wording.
+
+---
+
+## WhatsApp Gate + Locked Outreach (added 2026-05-09)
+
+### QR-first hard gate
+
+`frontend/app/components/WhatsAppGate.js` blocks every page (except `/whatsapp` itself) until WhatsApp is paired. States:
+
+| Bridge state | Gate shows |
+|---|---|
+| `bridge_down` (port 8001 unreachable) | Full-screen panel with `cd whatsapp-bridge && npm start` instructions |
+| `hasQr=true` | Big QR + "WhatsApp → Settings → Linked Devices → Link a Device" hint |
+| `ready=true` | Auto-dismiss; dashboard renders |
+
+Bypass: **"Continue in simulate mode →"** button writes `localStorage.leadgen_wa_skip_simulate=1`. Persists across reloads. Useful for dev/demo when bridge is down. To re-enable gate: `localStorage.removeItem('leadgen_wa_skip_simulate')`.
+
+`frontend/app/components/AppShell.js` is the layout wrapper that exempts `/whatsapp` from gating (would deadlock otherwise) and applies the gate to every other route.
+
+### Locked WhatsApp outreach templates
+
+Replaced the old AI-composed message path with two hardcoded templates in `agents/template_cache.py`:
+
+```python
+BUILD_SITE_TEMPLATE = (
+    "Hi there! I've created a demo website for {name} after seeing your great "
+    "feedback on Google — see a test video. Your brand deserves a top-tier site! "
+    "I can finalize and launch this for you in 48 hours for just ₹5,000. Interested?"
+)
+
+SEO_PITCH_TEMPLATE = (
+    "Hi there! Saw your existing site for {name} — strong reviews on Google but "
+    "missing key SEO basics hurting your ranking. I can fix metadata, mobile speed, "
+    "and structure in 48 hours for just ₹5,000. Interested?"
+)
+```
+
+Properties:
+- ~40-50 words each (WhatsApp readability — long messages don't get read)
+- `{name}` is the only variable; price `₹5,000` is hardcoded
+- `compose_message` tool returns `(template, cache_hit=True)` — no AI cost ever
+- `build_site` is the default; `seo_pitch` is selected via `lead_dict["approach"]`
+
+### Human-readable artifact filenames
+
+Generated HTML and recorded videos now use sanitized business names instead of `lead_<id>.{html,webm}`:
+
+| Lead | HTML | Video |
+|---|---|---|
+| `Bussy Sweet Shop` (id=5) | `Bussy_Sweet_Shop_demo_5.html` | `Bussy_Sweet_Shop_recording_demo_5.webm` |
+| `M/s Bassi & Co.` (id=12) | `Ms_Bassi_&_Co._demo_12.html` | `Ms_Bassi_&_Co._recording_demo_12.webm` |
+
+`agents/tools.py:_safe_filename` strips Windows-illegal chars (`\ / : * ? " < > |` + control chars), replaces whitespace with underscore, caps name at 80 chars, and appends `<suffix>_<lead_id>` to prevent duplicate-name collisions.
 
 ---
 
@@ -241,10 +296,14 @@ LeadGen/
 │
 ├── frontend/
 │   ├── app/
+│   │   ├── layout.js                    # Wraps body in <AppShell>
 │   │   ├── page.js                      # Dashboard
 │   │   ├── jobs/[id]/page.js            # Two-column: leads + Agent Thoughts panel
 │   │   ├── leads/page.js                # Lead explorer
-│   │   └── whatsapp/page.js             # QR pairing UI + status + disconnect
+│   │   ├── whatsapp/page.js             # QR pairing UI + status + disconnect
+│   │   └── components/
+│   │       ├── AppShell.js              # Wrapper — exempts /whatsapp, gates rest
+│   │       └── WhatsAppGate.js          # Full-screen QR gate + simulate-skip
 │   ├── components/Sidebar.js            # Nav + live WhatsApp status dot
 │   └── lib/api.js                       # apiFetch + watchJob + getWhatsAppStatus
 │
@@ -362,9 +421,11 @@ npm install                # First time only
 npm start                  # Listens on :8001
 ```
 
-Pair once at **http://localhost:3000/whatsapp** — scan the QR with your phone (WhatsApp → Settings → Linked Devices → Link a Device). Session is persisted in `whatsapp-bridge/.wwebjs_auth/` (gitignored), so you only scan once per machine.
+**Pair via the gate.** When the bridge is up, opening `http://localhost:3000/` shows a full-screen QR (WhatsAppGate). Scan with your phone (WhatsApp → Settings → Linked Devices → Link a Device); the gate auto-dismisses on pair. Session is persisted in `whatsapp-bridge/.wwebjs_auth/` (gitignored), so you only scan once per machine.
 
-When paired, the agent's `send_whatsapp` tool routes through the bridge automatically. If the bridge is down or unpaired, it falls back to Twilio (if configured), then to simulation.
+If the QR rotates faster than you can scan or "couldn't link to device" pops up, kill the bridge, wipe `whatsapp-bridge/.wwebjs_auth/`, restart `node server.js` — the protocol resets cleanly. If still broken, bump `whatsapp-web.js` to `@latest` (WhatsApp protocol changes occasionally lag the lib).
+
+When paired, the agent's `send_whatsapp` tool routes through the bridge automatically. If you'd rather skip pairing for dev/demo, click "Continue in simulate mode →" on the gate. If the bridge is down or unpaired during a real run, it falls back to Twilio (if configured), then to simulation.
 
 ### 5. (Optional) MCP servers as standalone
 
@@ -454,7 +515,11 @@ v2 agentic layer + WhatsApp Web bridge + cost controls: **shipped**.
 - [x] `frontend/app/page.js` — Max Leads dropdown + Force-refresh checkbox
 - [x] `frontend/app/jobs/[id]/page.js` — two-column layout + Agent Thoughts panel
 - [x] `frontend/app/whatsapp/page.js` — QR pairing UI + status polling
+- [x] `frontend/app/components/WhatsAppGate.js` + `AppShell.js` — QR-first hard gate (added 2026-05-09)
 - [x] `frontend/components/Sidebar.js` — live WhatsApp status dot
+- [x] Anthropic prompt caching wired (`cache_control` on system → covers tools + system) — added 2026-05-09
+- [x] Locked WhatsApp templates in `template_cache.py` — `BUILD_SITE_TEMPLATE` + `SEO_PITCH_TEMPLATE` (added 2026-05-09)
+- [x] Human-readable artifact filenames — `<Business_Name>_demo_<id>.html` / `_recording_demo_<id>.webm` (added 2026-05-09)
 - [x] `backend/tests/test_agent_decisions.py` — 10/10 decision checks pass
 
 ### Smoke test (recorded 2026-05-08)
@@ -466,6 +531,23 @@ Job 2: Pune / gym, max_leads=15 (re-run within 24h)
   → TTL reuse: cloned 20 leads from Job 1 (zero SerpAPI calls)
   → Phone dedup: 18/20 leads matched Job 1 phones → marked duplicate
   → 18 Anthropic agent runs avoided. Net cost on a duplicate run: ~zero.
+```
+
+### Cost estimate (recorded 2026-05-09)
+
+For a 5-lead run with all real APIs (SerpAPI + Anthropic + WhatsApp bridge), expected per-run spend:
+
+```
+SerpAPI discovery        : 1 call             $0.010
+Anthropic agent loop     : ~30 messages       $0.215  (no caching)
+                                              $0.130  (with prompt caching, ~40% off)
+OpenAI message templates : 0 (locked)         $0.000
+OpenAI site templates    : 0 (archetype)      $0.000
+WhatsApp send            : bridge             $0.000
+─────────────────────────────────────────────────────
+Total per 5 leads        :                    ~$0.13–$0.23
+Per-lead                 :                    ~$0.03–$0.05
+Scaling to 1000 leads    :                    ~$25–$45 with caching
 ```
 
 ---
