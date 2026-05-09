@@ -85,7 +85,9 @@ async def run_agent(lead: Lead, job_id: int,
         f"Lead ID: {lead.id}"
     )
 
-    client = anthropic.AsyncAnthropic()
+    # Pass key explicitly — pydantic Settings loads .env into the model but does NOT
+    # push to os.environ, so anthropic.AsyncAnthropic() with no args would not see it.
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     messages = [{"role": "user", "content": user_message}]
 
     sent = False

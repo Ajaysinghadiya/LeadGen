@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     serpapi_key: str = "MOCK"          # Alternative to Google Places (free tier available)
     openai_api_key: str = "MOCK"
     openai_model: str = "gpt-4o-mini"
+    anthropic_api_key: str = "MOCK"    # Read by anthropic SDK from env automatically;
+                                       # declared here so pydantic Settings accepts it from .env
     twilio_account_sid: str = "MOCK"
     twilio_auth_token: str = "MOCK"
     twilio_whatsapp_from: str = "whatsapp:+14155238886"
