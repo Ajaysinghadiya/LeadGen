@@ -9,7 +9,7 @@ import asyncio
 import json
 
 from database import get_db
-from models import Job
+from models import Job, Lead, Outreach
 from schemas import JobCreate, JobResponse, MessageResponse, PaginatedJobs
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -122,3 +122,52 @@ async def run_pipeline(job_id: int):
     # Import here to avoid circular imports
     from agents.orchestrator import run_job
     await run_job(job_id, broadcast_event)
+
+
+@router.post("/{job_id}/stop", response_model=MessageResponse)
+async def stop_job(job_id: int, db: AsyncSession = Depends(get_db)):
+    """Mark a running job as stopped. The orchestrator polls Job.status between
+    leads and breaks early when it sees 'stopped' — graceful, not abrupt.
+    The current lead being processed will finish first to avoid half-sent
+    WhatsApp messages or half-recorded videos."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in ("running", "pending"):
+        raise HTTPException(status_code=409, detail=f"Job is {job.status}, cannot stop")
+
+    job.status = "stopped"
+    await db.commit()
+
+    # Notify any open SSE listeners so the UI updates immediately.
+    await broadcast_event(job_id, {
+        "type": "result",
+        "lead_id": "",
+        "content": "⏹ Stop requested — finishing current lead, then halting.",
+        "timestamp": __import__("time").time(),
+    })
+    return MessageResponse(message="Stop requested", job_id=job_id)
+
+
+@router.delete("/{job_id}", response_model=MessageResponse)
+async def delete_job(job_id: int, db: AsyncSession = Depends(get_db)):
+    """Delete a job and all its leads + outreach records.
+    Generated HTML / video files on disk are NOT removed (manual cleanup if needed)."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Cascade: leads → outreach → job
+    leads_q = await db.execute(select(Lead).where(Lead.job_id == job_id))
+    leads = list(leads_q.scalars().all())
+    for lead in leads:
+        out_q = await db.execute(select(Outreach).where(Outreach.lead_id == lead.id))
+        for o in out_q.scalars().all():
+            await db.delete(o)
+        await db.delete(lead)
+
+    await db.delete(job)
+    await db.commit()
+    return MessageResponse(message=f"Deleted job {job_id} ({len(leads)} leads)", job_id=job_id)

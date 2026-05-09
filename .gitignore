@@ -33,3 +33,9 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime logs (auto-generated)
+*.log
+backend/backend.log
+whatsapp-bridge/bridge.log
+whatsapp-bridge/bridge.err.log

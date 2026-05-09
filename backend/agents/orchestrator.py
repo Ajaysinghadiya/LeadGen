@@ -26,7 +26,7 @@ from sqlalchemy import select, func
 
 from config import settings
 from database import AsyncSessionLocal
-from models import Job, Lead
+from models import Job, Lead, Outreach
 from agents.tools import TOOLS, dispatch, LAST_CACHE_HIT
 
 
@@ -94,6 +94,12 @@ async def run_agent(lead: Lead, job_id: int,
     skipped = False
     cache_read_total = 0
     cache_write_total = 0
+    # Track tool outputs so we can persist to DB after the agent finishes.
+    # Without this, dashboard shows "site=[no] video=[no]" even when files exist.
+    site_path_out: str | None = None
+    video_path_out: str | None = None
+    composed_message: str | None = None
+    send_result: dict | None = None
 
     for _ in range(MAX_TURNS):
         response = await client.messages.create(
@@ -134,6 +140,17 @@ async def run_agent(lead: Lead, job_id: int,
                         broadcast, job_id, lead_id_str, "result",
                         str(result)[:300]
                     )
+                    # Capture tool outputs for DB persistence at the end of the loop.
+                    if block.name == "generate_site" and isinstance(result, str):
+                        site_path_out = result
+                    elif block.name == "record_video" and isinstance(result, dict):
+                        if result.get("success") and result.get("video_path"):
+                            video_path_out = result["video_path"]
+                    elif block.name == "compose_message" and isinstance(result, str):
+                        composed_message = result
+                    elif block.name == "send_whatsapp" and isinstance(result, dict):
+                        send_result = result
+                        sent = True
                     # Cache-hit telemetry: emit cost_saved when template cache served the request.
                     if block.name in ("generate_site", "compose_message"):
                         if LAST_CACHE_HIT.get(block.name) is True:
@@ -141,8 +158,6 @@ async def run_agent(lead: Lead, job_id: int,
                                 broadcast, job_id, lead_id_str, "result",
                                 f"💰 cost_saved: {block.name} served from template cache (no AI call)"
                             )
-                    if block.name == "send_whatsapp":
-                        sent = True
                 except Exception as e:
                     await _emit(broadcast, job_id, lead_id_str, "error", str(e))
                     result = {"error": str(e)}
@@ -187,6 +202,27 @@ async def run_agent(lead: Lead, job_id: int,
                 db_lead.status = "message_sent"
             elif skipped:
                 db_lead.status = "skipped"
+            # Persist tool outputs — without this the dashboard shows the lead
+            # as if no site or video was ever generated.
+            if site_path_out:
+                db_lead.generated_site_path = site_path_out
+            if video_path_out:
+                db_lead.video_path = video_path_out
+
+            # Create an Outreach row when the agent actually sent something.
+            # Surfaces the message text + delivery status to the leads explorer.
+            if sent and composed_message:
+                ex = await db.execute(select(Outreach).where(Outreach.lead_id == lead.id))
+                if ex.scalar_one_or_none() is None:
+                    sr = send_result or {}
+                    db.add(Outreach(
+                        lead_id=lead.id,
+                        message_text=composed_message,
+                        video_url=video_path_out,
+                        whatsapp_status=str(sr.get("status") or "sent")[:20],
+                        twilio_sid=str(sr.get("sid") or "")[:200] or None,
+                        sent_at=datetime.utcnow(),
+                    ))
             await db.commit()
 
 
@@ -382,6 +418,19 @@ async def run_job(job_id: int,
 
     # ─── Phase 4 — run agent loop per (capped, deduped) lead ────────────────
     for lead in leads_snapshot:
+        # Cooperative cancellation: check for user-requested stop before each lead.
+        # Stops are graceful — the lead currently being processed finishes first.
+        async with AsyncSessionLocal() as db:
+            cur = await db.execute(select(Job.status).where(Job.id == job_id))
+            current_status = cur.scalar_one_or_none()
+        if current_status == "stopped":
+            await broadcast(job_id, {
+                "type": "result", "lead_id": "",
+                "content": "⏹ Stop honoured — exiting agent loop.",
+                "timestamp": time.time(),
+            })
+            break
+
         try:
             await run_agent(lead, job_id, broadcast)
         except Exception as e:
@@ -397,7 +446,9 @@ async def run_job(job_id: int,
         cur = await db.execute(select(Job).where(Job.id == job_id))
         job = cur.scalar_one_or_none()
         if job:
-            job.status = "completed"
+            # Preserve "stopped" status if user requested cancellation.
+            if job.status != "stopped":
+                job.status = "completed"
             job.current_step = None
 
             sent_q = await db.execute(

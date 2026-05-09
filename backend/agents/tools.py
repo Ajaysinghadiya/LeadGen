@@ -249,6 +249,10 @@ async def dispatch(tool_name: str, tool_input: dict):
         # Priority 1: Node WhatsApp Web bridge (personal WhatsApp via QR pairing)
         status = await _bridge_status()
         if status.get("ready"):
+            # Bridge claims paired — a send failure here is a real problem
+            # (puppeteer detached frame, expired session, recipient not on WA).
+            # Raise instead of silently falling back to simulate, otherwise
+            # the dashboard shows "message_sent" while nothing actually went out.
             try:
                 result = await _bridge_send(phone, message, media_path=media_path)
                 return {
@@ -257,10 +261,9 @@ async def dispatch(tool_name: str, tool_input: dict):
                     "via": "whatsapp_bridge",
                 }
             except Exception as e:
-                # Fall through to next channel on failure
-                bridge_error = str(e)
-        else:
-            bridge_error = status.get("error", "bridge not connected")
+                raise RuntimeError(f"WhatsApp bridge send failed: {e}") from e
+
+        bridge_error = status.get("error", "bridge not connected")
 
         # Priority 2: Twilio (if configured)
         if settings.is_real("twilio_account_sid") and settings.is_real("twilio_auth_token"):

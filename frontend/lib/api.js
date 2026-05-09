@@ -11,7 +11,16 @@ async function apiFetch(path, options = {}) {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || `API error ${res.status}`)
+    // FastAPI validation errors return detail as an array of objects:
+    //   [{loc:["body","city"], msg:"Field required", ...}, ...]
+    // Stringify those into something a human can read instead of "[object Object]".
+    let msg = err.detail
+    if (Array.isArray(msg)) {
+      msg = msg.map(d => `${(d.loc || []).slice(1).join('.') || 'field'}: ${d.msg}`).join('; ')
+    } else if (msg && typeof msg !== 'string') {
+      msg = JSON.stringify(msg)
+    }
+    throw new Error(msg || `API error ${res.status}`)
   }
   return res.json()
 }
@@ -39,6 +48,14 @@ export async function getJobs(page = 1, pageSize = 20) {
 
 export async function getJob(jobId) {
   return apiFetch(`/jobs/${jobId}`)
+}
+
+export async function stopJob(jobId) {
+  return apiFetch(`/jobs/${jobId}/stop`, { method: 'POST' })
+}
+
+export async function deleteJob(jobId) {
+  return apiFetch(`/jobs/${jobId}`, { method: 'DELETE' })
 }
 
 // ─── Leads ────────────────────────────────────────────────────────────────────

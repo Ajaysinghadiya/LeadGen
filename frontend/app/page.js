@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '../components/Sidebar'
-import { createJob, getJobs } from '../lib/api'
+import { createJob, getJobs, stopJob, deleteJob } from '../lib/api'
 
 function formatRelativeTime(dateString) {
   const date = new Date(dateString)
@@ -16,7 +16,7 @@ function formatRelativeTime(dateString) {
 }
 
 function StatusBadge({ status }) {
-  const emoji = { pending: '⏳', running: '🔄', completed: '✅', failed: '❌' }
+  const emoji = { pending: '⏳', running: '🔄', completed: '✅', failed: '❌', stopped: '⏹' }
   return (
     <span className={`badge badge-${status}`}>
       {emoji[status] || '•'} {status}
@@ -30,9 +30,50 @@ function jobLabel(category) {
   return category
 }
 
-function JobCard({ job }) {
+function JobCard({ job, onChanged }) {
+  const handleStop = async (e) => {
+    e.preventDefault(); e.stopPropagation()
+    if (!confirm(`Stop job #${job.id}? Current lead will finish; remaining leads skipped.`)) return
+    try { await stopJob(job.id); onChanged?.() } catch (err) { alert(`Stop failed: ${err.message}`) }
+  }
+  const handleDelete = async (e) => {
+    e.preventDefault(); e.stopPropagation()
+    if (!confirm(`Delete job #${job.id} and ALL its leads? This cannot be undone.`)) return
+    try { await deleteJob(job.id); onChanged?.() } catch (err) { alert(`Delete failed: ${err.message}`) }
+  }
+  const isRunning = job.status === 'running' || job.status === 'pending'
+
   return (
-    <Link href={`/jobs/${job.id}`} className="job-card">
+    <Link href={`/jobs/${job.id}`} className="job-card" style={{ position: 'relative' }}>
+      {/* Action buttons — top-right, stopPropagation to avoid card-link nav */}
+      <div style={{
+        position: 'absolute', top: 10, right: 10,
+        display: 'flex', gap: 4, zIndex: 2,
+      }}>
+        {isRunning && (
+          <button
+            type="button"
+            onClick={handleStop}
+            title="Stop this job"
+            style={{
+              background: 'rgba(234,179,8,0.15)', border: '1px solid rgba(234,179,8,0.4)',
+              color: '#fde68a', borderRadius: 6, padding: '0.15rem 0.45rem',
+              fontSize: '0.72rem', cursor: 'pointer', lineHeight: 1.2,
+            }}
+          >⏹ Stop</button>
+        )}
+        <button
+          type="button"
+          onClick={handleDelete}
+          title="Delete this job"
+          style={{
+            background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.3)',
+            color: '#fca5a5', borderRadius: 6, padding: '0.15rem 0.45rem',
+            fontSize: '0.72rem', cursor: 'pointer', lineHeight: 1.2,
+          }}
+        >✕</button>
+      </div>
+
       <div className="job-card-header">
         <div>
           <div className="job-card-title">
@@ -322,7 +363,7 @@ export default function DashboardPage() {
         ) : (
           <div className="jobs-grid">
             {jobs.map((job) => (
-              <JobCard key={job.id} job={job} />
+              <JobCard key={job.id} job={job} onChanged={loadJobs} />
             ))}
           </div>
         )}

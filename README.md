@@ -131,6 +131,39 @@ All four emit `cost_saved` / `prompt_cache` SSE events into the Agent Thoughts p
 
 ---
 
+## Job Lifecycle Controls (added 2026-05-09)
+
+### Stop a running job
+
+`POST /jobs/{id}/stop` flips `Job.status="stopped"`. The orchestrator polls this between leads — when it sees `stopped`, the current lead finishes (so no half-sent WhatsApp / half-recorded video) and the agent loop exits. Finalize phase preserves the `stopped` status instead of overwriting to `completed`.
+
+UI: `⏹ Stop` button appears on each `JobCard` on the dashboard AND in the job-detail page header. Both fire `POST /jobs/{id}/stop` after a confirm dialog. Returns 409 if the job is already done/failed.
+
+### Delete a job
+
+`DELETE /jobs/{id}` cascade-deletes the job's leads + outreach rows. **Files on disk are NOT removed** (HTML / videos persist for manual cleanup if you want them).
+
+UI: `✕` icon on each `JobCard` (top-right). Confirm dialog. Allowed even on running jobs — but recommend stopping first to avoid the orchestrator writing to a deleted `job_id`.
+
+### Tool-output persistence (bug fix)
+
+Earlier the orchestrator only updated `Lead.status`. Tool outputs (generated site path, video path, message text, send result) were lost — the dashboard rendered `site=[no] video=[no]` even when the agent had successfully generated everything. The orchestrator now captures each tool's return value and writes:
+
+| Tool | Persisted to |
+|---|---|
+| `generate_site` | `Lead.generated_site_path` |
+| `record_video` | `Lead.video_path` (when `success=true`) |
+| `compose_message` | `Outreach.message_text` (on send) |
+| `send_whatsapp` | `Outreach.whatsapp_status` + `twilio_sid` + `sent_at` |
+
+### Bridge send — loud failures only
+
+If the WhatsApp bridge reports `ready=true` but `/send` raises (e.g. puppeteer "detached Frame" bug, expired session, recipient not on WhatsApp), `tools.py:send_whatsapp` now **raises** instead of silently falling through to `simulate_send`. The agent surfaces this as an `error` SSE event and the lead does NOT flip to `message_sent`. Previously this fallback masked real bridge bugs as fake "successes".
+
+The simulate path is still reachable when the bridge reports `ready=false` (down or unpaired) — that's the legitimate dev/demo escape hatch.
+
+---
+
 ## Boring-Categories Auto-Sweep (added 2026-05-09)
 
 ### Targeting thesis
@@ -605,6 +638,10 @@ v2 agentic layer + WhatsApp Web bridge + cost controls: **shipped**.
 - [x] `frontend/app/components/WhatsAppGate.js` + `AppShell.js` — QR-first hard gate (added 2026-05-09)
 - [x] `backend/agents/lead_finder.py` — boring-category auto-sweep + rating/review filters + nearest-city fallback (added 2026-05-09)
 - [x] `frontend/app/page.js` — simplified to city + max_leads (5–25); category input removed (added 2026-05-09)
+- [x] Orchestrator persists tool outputs — `lead.generated_site_path`, `lead.video_path`, `Outreach` row created on send (fixed 2026-05-09)
+- [x] Bridge send loud-fail — when bridge says `ready=true` but send 500s, raise instead of silently falling to `simulate_send` (fixed 2026-05-09)
+- [x] Stop running job — `POST /jobs/{id}/stop` + ⏹ Stop button on dashboard cards and job page header. Graceful — current lead finishes (added 2026-05-09)
+- [x] Delete job — `DELETE /jobs/{id}` cascades to leads + outreach. ✕ icon on JobCard with confirm dialog (added 2026-05-09)
 - [x] `frontend/components/Sidebar.js` — live WhatsApp status dot
 - [x] Anthropic prompt caching wired (`cache_control` on system → covers tools + system) — added 2026-05-09
 - [x] Locked WhatsApp templates in `template_cache.py` — `BUILD_SITE_TEMPLATE` + `SEO_PITCH_TEMPLATE` (added 2026-05-09)

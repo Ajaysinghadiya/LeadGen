@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import Sidebar from '../../../components/Sidebar'
-import { getJob, getLeads, watchJob } from '../../../lib/api'
+import { getJob, getLeads, watchJob, stopJob } from '../../../lib/api'
 
 // ─── Agent Thoughts panel ────────────────────────────────────────────────────
 
@@ -303,11 +303,31 @@ export default function JobMonitorPage() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             <h1 className="page-title" style={{ margin: 0 }}>
-              {job.category} <span style={{ fontWeight: 300, color: 'var(--text-muted)' }}>in</span> {job.city}
+              {job.category === 'auto_boring_sweep' ? 'Local SMB sweep' : job.category}
+              {' '}<span style={{ fontWeight: 300, color: 'var(--text-muted)' }}>in</span> {job.city}
             </h1>
             <span className={`badge badge-${job.status}`}>
-              {{ pending: '⏳', running: '🔄', completed: '✅', failed: '❌' }[job.status]}{' '}{job.status}
+              {{ pending: '⏳', running: '🔄', completed: '✅', failed: '❌', stopped: '⏹' }[job.status]}{' '}{job.status}
             </span>
+            {(job.status === 'running' || job.status === 'pending') && (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!confirm(`Stop job #${job.id}? Current lead will finish; remaining leads skipped.`)) return
+                  try { await stopJob(job.id) } catch (e) { alert(`Stop failed: ${e.message}`) }
+                }}
+                style={{
+                  background: 'rgba(234,179,8,0.15)',
+                  border: '1px solid rgba(234,179,8,0.4)',
+                  color: '#fde68a',
+                  padding: '0.3rem 0.7rem',
+                  borderRadius: 6,
+                  fontSize: '0.78rem',
+                  cursor: 'pointer',
+                }}
+                title="Graceful stop — current lead finishes, remaining leads skipped"
+              >⏹ Stop Job</button>
+            )}
           </div>
           <p className="page-subtitle">
             Started {new Date(job.created_at).toLocaleString('en-IN')}
