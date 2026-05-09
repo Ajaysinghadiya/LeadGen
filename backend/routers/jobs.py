@@ -36,9 +36,13 @@ async def create_job(
     db: AsyncSession = Depends(get_db),
 ):
     """Start a new lead generation job."""
+    # Category input has been removed from the UI — agents/lead_finder.py auto-sweeps
+    # the curated boring-categories list. Job.category stores the SWEEP_TAG sentinel
+    # so 24h-TTL reuse / dedup still match across sweep jobs in the same city.
+    from agents.lead_finder import SWEEP_TAG
     job = Job(
         city=payload.city.strip(),
-        category=payload.category.strip(),
+        category=SWEEP_TAG,
         max_leads=payload.max_leads,
         force_refresh=payload.force_refresh,
     )

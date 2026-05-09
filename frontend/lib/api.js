@@ -18,13 +18,15 @@ async function apiFetch(path, options = {}) {
 
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
-export async function createJob(city, category, opts = {}) {
+export async function createJob(city, opts = {}) {
+  // Category input was removed from the UI in 2026-05-09: backend auto-sweeps
+  // 8 curated "boring" SMB categories. We no longer send `category` from the
+  // client — backend stores the SWEEP_TAG sentinel.
   const { maxLeads = 25, forceRefresh = false } = opts
   return apiFetch('/jobs/', {
     method: 'POST',
     body: JSON.stringify({
       city,
-      category,
       max_leads: maxLeads,
       force_refresh: forceRefresh,
     }),

@@ -10,9 +10,12 @@ from pydantic import BaseModel, Field
 
 class JobCreate(BaseModel):
     city: str
-    category: str
-    max_leads: int = Field(default=25, ge=1, le=100,
-                           description="Cap on number of leads passed to the agent loop. Controls API spend.")
+    # category is no longer collected from the user — agents/lead_finder.py auto-sweeps
+    # 8 "boring" categories. Kept as Optional + default for backwards-compat with
+    # any external API caller still sending it; payload value is ignored.
+    category: Optional[str] = None
+    max_leads: int = Field(default=25, ge=5, le=25,
+                           description="Cap on leads passed to the agent loop. Range 5–25 (UI-enforced).")
     force_refresh: bool = Field(default=False,
                                 description="If True, bypass the 24h discovery cache and refetch from the source API.")
 

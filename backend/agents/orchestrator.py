@@ -304,10 +304,16 @@ async def run_job(job_id: int,
         reused = await _maybe_reuse_recent_leads(job, broadcast, job_id)
 
         if not reused:
-            from workers.discovery import run_discovery
+            # v2: auto-sweep "boring" categories + nearest-city fallback.
+            # See agents/lead_finder.py for filter rules.
+            from agents.lead_finder import run_discovery, BORING_CATEGORIES
             await broadcast(job_id, {
                 "type": "thought", "lead_id": "",
-                "content": f"Discovering businesses in {job_snap.city} for category '{job_snap.category}'...",
+                "content": (
+                    f"Discovering under-served local businesses in {job_snap.city} "
+                    f"across {len(BORING_CATEGORIES)} boring categories: "
+                    f"{', '.join(BORING_CATEGORIES)}..."
+                ),
                 "timestamp": time.time(),
             })
             await run_discovery(job_id)

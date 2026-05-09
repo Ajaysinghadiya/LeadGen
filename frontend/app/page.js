@@ -24,13 +24,19 @@ function StatusBadge({ status }) {
   )
 }
 
+function jobLabel(category) {
+  // Backend stores `auto_boring_sweep` for v2 sweep jobs — render a friendly label.
+  if (!category || category === 'auto_boring_sweep') return 'Local SMB sweep'
+  return category
+}
+
 function JobCard({ job }) {
   return (
     <Link href={`/jobs/${job.id}`} className="job-card">
       <div className="job-card-header">
         <div>
           <div className="job-card-title">
-            {job.category} <span style={{ color: 'var(--text-muted)' }}>in</span> {job.city}
+            {jobLabel(job.category)} <span style={{ color: 'var(--text-muted)' }}>in</span> {job.city}
           </div>
           <div className="job-card-meta">
             #{job.id} · {formatRelativeTime(job.created_at)}
@@ -96,13 +102,14 @@ function JobCard({ job }) {
   )
 }
 
-const LEAD_CAP_OPTIONS = [10, 20, 25, 30, 35, 50]
+// Range enforced both in UI (min/max attrs) and on the backend (Pydantic ge/le).
+const LEADS_MIN = 5
+const LEADS_MAX = 25
 
 export default function DashboardPage() {
   const router = useRouter()
   const [city, setCity] = useState('')
-  const [category, setCategory] = useState('')
-  const [maxLeads, setMaxLeads] = useState(25)
+  const [maxLeads, setMaxLeads] = useState(15)
   const [forceRefresh, setForceRefresh] = useState(false)
   const [loading, setLoading] = useState(false)
   const [jobs, setJobs] = useState([])
@@ -128,14 +135,16 @@ export default function DashboardPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!city.trim() || !category.trim()) return
+    if (!city.trim()) return
+    const n = Number(maxLeads)
+    if (!Number.isFinite(n) || n < LEADS_MIN || n > LEADS_MAX) {
+      setError(`Max leads must be between ${LEADS_MIN} and ${LEADS_MAX}.`)
+      return
+    }
     setLoading(true)
     setError(null)
     try {
-      const res = await createJob(city.trim(), category.trim(), {
-        maxLeads,
-        forceRefresh,
-      })
+      const res = await createJob(city.trim(), { maxLeads: n, forceRefresh })
       router.push(`/jobs/${res.job_id}`)
     } catch (e) {
       setError(e.message)
@@ -184,9 +193,11 @@ export default function DashboardPage() {
 
         {/* Search form */}
         <div className="search-form">
-          <div className="search-form-title">🎯 Start New Prospecting Job</div>
+          <div className="search-form-title">🎯 Find Under-Served Local Businesses</div>
           <div className="search-form-subtitle">
-            Enter a city and business category to begin automated lead generation.
+            Enter a city. We auto-sweep 8 boring SMB categories — sweet shops, dhabas,
+            saree shops, jewellers, bakeries, tailors, printing presses, handicrafts —
+            and qualify only those that no agency is pitching.
           </div>
           <form onSubmit={handleSubmit}>
             <div className="search-form-row">
@@ -201,34 +212,24 @@ export default function DashboardPage() {
                   required
                 />
               </div>
-              <div className="input-group">
-                <label className="input-label">Business Category</label>
+              <div className="input-group" style={{ flex: '0 0 140px' }}>
+                <label className="input-label">Max Leads ({LEADS_MIN}–{LEADS_MAX})</label>
                 <input
                   className="input"
-                  type="text"
-                  placeholder="e.g. restaurants, gyms, salons"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
+                  type="number"
+                  min={LEADS_MIN}
+                  max={LEADS_MAX}
+                  step={1}
+                  value={maxLeads}
+                  onChange={(e) => setMaxLeads(e.target.value)}
+                  title={`Cap on leads passed to the agent loop. Range ${LEADS_MIN}–${LEADS_MAX}.`}
                   required
                 />
-              </div>
-              <div className="input-group" style={{ flex: '0 0 130px' }}>
-                <label className="input-label">Max Leads</label>
-                <select
-                  className="input"
-                  value={maxLeads}
-                  onChange={(e) => setMaxLeads(parseInt(e.target.value, 10))}
-                  title="Cap on leads passed to the agent loop. Lower = less API spend."
-                >
-                  {LEAD_CAP_OPTIONS.map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
               </div>
               <button
                 type="submit"
                 className="btn btn-primary btn-lg"
-                disabled={loading || !city.trim() || !category.trim()}
+                disabled={loading || !city.trim()}
               >
                 {loading ? (
                   <><div className="spinner" /> Starting…</>
@@ -268,19 +269,14 @@ export default function DashboardPage() {
             )}
           </form>
 
-          {/* Quick examples */}
+          {/* Quick city picks */}
           <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Quick:</span>
-            {[
-              ['Jaipur', 'restaurants'],
-              ['Pune', 'gyms'],
-              ['Delhi', 'salons'],
-              ['Mumbai', 'cafes'],
-            ].map(([c, cat]) => (
+            {['Jaipur', 'Pune', 'Delhi', 'Mumbai', 'Ahmedabad', 'Lucknow'].map((c) => (
               <button
-                key={c + cat}
+                key={c}
                 type="button"
-                onClick={() => { setCity(c); setCategory(cat) }}
+                onClick={() => setCity(c)}
                 style={{
                   background: 'var(--surface)',
                   border: '1px solid var(--surface-border)',
@@ -294,7 +290,7 @@ export default function DashboardPage() {
                 onMouseOver={e => e.target.style.borderColor = 'var(--primary)'}
                 onMouseOut={e => e.target.style.borderColor = 'var(--surface-border)'}
               >
-                {cat} in {c}
+                {c}
               </button>
             ))}
           </div>

@@ -93,7 +93,9 @@
       "Bash(python -m py_compile backend/agents/orchestrator.py)",
       "Bash(python -m py_compile backend/agents/tools.py backend/agents/template_cache.py)",
       "PowerShell($conn = Get-NetTCPConnection -LocalPort 8001 -ErrorAction SilentlyContinue; if \\($conn\\) { Stop-Process -Id $conn[0].OwningProcess -Force; \"killed PID \" + $conn[0].OwningProcess } else { \"port 8001 already free\" })",
-      "Bash(echo \"started PID $!\")"
+      "Bash(echo \"started PID $!\")",
+      "Bash(python -m py_compile backend/agents/lead_finder.py backend/agents/orchestrator.py backend/routers/jobs.py backend/schemas.py)",
+      "Bash(node --check frontend/app/page.js)"
     ],
     "additionalDirectories": [
       "c:\\Users\\91809\\Desktop\\All Antigravity\\LeadGen\\.claude",
