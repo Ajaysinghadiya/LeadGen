@@ -18,11 +18,17 @@ AI-powered system that finds local businesses without websites, generates custom
 ```
 1. Land on dashboard → WhatsAppGate blocks UI → scan QR with phone → pair
    (or click "Continue in simulate mode" to bypass for dev/demo)
-2. City + Category form
+2. Form: city + max_leads (5–25). NO business category — system auto-sweeps.
       ↓
-[Claude Agent] → searches Google Places / SerpAPI for local businesses
+[lead_finder] → parallel SerpAPI/Google Places sweep across 8 boring SMB
+                categories: sweet shop, dhaba, saree shop, local jeweller,
+                bakery, tailor boutique, printing press, handicraft shop
       ↓
-      → audits each existing website (0–100 score)
+      → filters: rating ≥ 3.8, reviews ∈ [5, 100], phone present
+      ↓
+      → if < 5 qualified leads → expand to nearest city (no filter loosening)
+      ↓
+[Claude Agent per lead] → audits each existing website (0–100 score)
       ↓
       → dedup check: skip leads whose phone already received outreach
       ↓
@@ -122,6 +128,86 @@ All four emit `cost_saved` / `prompt_cache` SSE events into the Agent Thoughts p
 **Template cache (`agents/template_cache.py`):**
 - **Site templates** — `render_site` uses the archetype path by default (free, deterministic). Legacy AI/mock path kept behind `LEADGEN_USE_LEGACY_TEMPLATE=1` for fallback; cached at `data/site_templates/{category}.html`.
 - **Message templates** (locked 2026-05-09) — `render_message` returns one of two **hardcoded** templates (`BUILD_SITE_TEMPLATE`, `SEO_PITCH_TEMPLATE`) with `{name}` substituted. NO AI call ever; price ₹5,000 hardcoded; ~40-50 words each for WhatsApp readability. Edit the constants at the top of `template_cache.py` to change wording.
+
+---
+
+## Boring-Categories Auto-Sweep (added 2026-05-09)
+
+### Targeting thesis
+
+We target **under-served Indian SMBs that nobody is pitching**: real local businesses with demand but weak/no online presence, in categories that digital agencies overlook because they're "boring" — not gyms, not salons, not cafés.
+
+### What the user enters
+
+Just two fields:
+- **City** (e.g. `Jaipur`)
+- **Max Leads** — number input, restricted **5–25** (UI + Pydantic both enforce)
+
+No category input. The system sweeps a curated list automatically.
+
+### Curated boring-category list
+
+| Category | Why included |
+|---|---|
+| `sweet shop` (mithai, halwai) | High spend potential, no online ambition baked in |
+| `dhaba` (small family restaurants) | Real-money business, agencies skip them |
+| `saree shop` (silk, sari, cloth) | Cash-flow positive, mostly walk-in only |
+| `local jeweller` (small gold shops) | Decent margins, often on amateur Wix sites |
+| `bakery` (local, not Theobroma-tier) | Reorders + footfall, nobody pitches |
+| `tailor boutique` (small fashion) | Repeat customers, weak digital |
+| `printing press` (digital print + design) | B2B steady cash, no online presence |
+| `handicraft shop` (textile, local crafts) | Tourist-driven, online undermarketed |
+
+Deliberately excluded: kiraana stores (margin too thin for ₹5k spend), gyms/salons/cafés (over-pitched), mechanics/electricians (don't pay for marketing).
+
+### Qualification filters
+
+Applied during discovery, BEFORE the agent loop touches a lead:
+
+| Signal | Threshold | Reason |
+|---|---|---|
+| `rating` | ≥ 3.8 | Below = customer-experience problem, not website problem |
+| `reviews` | 5 ≤ count ≤ 100 | < 5 = too thin, > 100 = already pitched by competitors |
+| `phone` | required | No phone = can't WhatsApp |
+| Listings missing rating/reviews data | dropped | No signal of demand |
+
+### Sweep mechanics
+
+1. Fan out 8 SerpAPI / Google Places queries in **parallel** via `asyncio.gather` (~3s vs ~24s sequential)
+2. Apply filters to each category result set
+3. Dedup by phone across all 8 categories (a sweet shop might also list under bakery)
+4. If primary city yields **< 5 qualified leads**, expand to nearest city — **filters never loosen, only geography widens**
+
+Nearest-city map covers 25 Indian metros + tier-2 cities. Examples:
+- Jaipur → Ajmer, Jodhpur, Kishangarh
+- Mumbai → Thane, Navi Mumbai, Kalyan
+- Delhi → Gurgaon, Noida, Ghaziabad
+- Pune → Pimpri-Chinchwad, Satara, Nashik
+
+If user's city isn't in the map and yields < 5 leads, the job completes with whatever was found — no silent loosening of standards.
+
+### Cost
+
+| Provider | Calls per job | Cost per job |
+|---|---|---|
+| Google Places (priority 1) | 8 | $0.00 (free tier ample) |
+| SerpAPI (fallback) | 8 | $0.08 (paid: $50/5000) |
+| Free tier alone (100/mo) | 8 | ~12 jobs/month before quota hit |
+
+### Files
+
+```
+backend/agents/lead_finder.py        # NEW — sweep + filter + nearest-city
+backend/agents/orchestrator.py       # imports run_discovery from lead_finder
+backend/schemas.py                   # JobCreate.category Optional, max_leads 5–25
+backend/routers/jobs.py              # stores SWEEP_TAG="auto_boring_sweep"
+frontend/app/page.js                 # 2-field form, JobCard renders "Local SMB sweep"
+frontend/lib/api.js                  # createJob(city, opts) — no category
+```
+
+### Storage convention
+
+`Job.category` is set to the synthetic value `"auto_boring_sweep"` for v2 jobs. The 24h TTL reuse logic still works because city + sentinel match across runs. Per-lead `Lead.category` holds the actual matched boring category (e.g. `"sweet shop"`) — that drives archetype routing and per-lead messaging.
 
 ---
 
@@ -245,9 +331,10 @@ LeadGen/
 ├── backend/
 │   ├── agents/                          # Claude SDK agentic layer (v2)
 │   │   ├── __init__.py
-│   │   ├── orchestrator.py              # run_agent + run_job (SDK loop, dedup pre-flight)
+│   │   ├── orchestrator.py              # run_agent + run_job (SDK loop, dedup pre-flight, prompt cache)
+│   │   ├── lead_finder.py               # boring-category sweep + filters + nearest-city
 │   │   ├── tools.py                     # 6 tool defs + dispatch (bridge→twilio→simulate)
-│   │   ├── template_cache.py            # archetype-first; legacy AI/mock fallback
+│   │   ├── template_cache.py            # archetype-first sites; LOCKED message templates
 │   │   ├── archetype_router.py          # category → archetype slug
 │   │   ├── site_archetypes/             # 6 distinctive site templates
 │   │   │   ├── __init__.py              # registry + render_for_lead
@@ -516,6 +603,8 @@ v2 agentic layer + WhatsApp Web bridge + cost controls: **shipped**.
 - [x] `frontend/app/jobs/[id]/page.js` — two-column layout + Agent Thoughts panel
 - [x] `frontend/app/whatsapp/page.js` — QR pairing UI + status polling
 - [x] `frontend/app/components/WhatsAppGate.js` + `AppShell.js` — QR-first hard gate (added 2026-05-09)
+- [x] `backend/agents/lead_finder.py` — boring-category auto-sweep + rating/review filters + nearest-city fallback (added 2026-05-09)
+- [x] `frontend/app/page.js` — simplified to city + max_leads (5–25); category input removed (added 2026-05-09)
 - [x] `frontend/components/Sidebar.js` — live WhatsApp status dot
 - [x] Anthropic prompt caching wired (`cache_control` on system → covers tools + system) — added 2026-05-09
 - [x] Locked WhatsApp templates in `template_cache.py` — `BUILD_SITE_TEMPLATE` + `SEO_PITCH_TEMPLATE` (added 2026-05-09)
